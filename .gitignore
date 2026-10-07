@@ -1,0 +1,5 @@
+# everything setup.sh installs/builds (conda env, packer, image-builder, disk images)
+.simbricks/
+# simbricks-run output
+out/
+__pycache__/

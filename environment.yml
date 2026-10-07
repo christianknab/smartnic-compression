@@ -1,0 +1,36 @@
+# Conda env for SimBricks + QEMU + Verilated Corundum.
+#
+# The Corundum simulator (simb_corundum) and its python packages are NOT taken
+# from the channel: setup.sh builds them from ./component-corundum so we can
+# modify the RTL. Versions are pinned to the 0.5 series to match the
+# component-corundum submodule commit (0.5.1).
+name: simbricks
+channels:
+  - https://conda.simbricks.io/latest
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.12
+  - pip
+  # simbricks core + local runner (provides simbricks-run)
+  - simbricks-orchestration>=0.5.1,<0.6
+  - simbricks-runtime>=0.5.1,<0.6
+  - simbricks-runner>=0.5.1,<0.6
+  - simbricks-local>=0.5.1,<0.6
+  - simbricks-cli>=0.5.1,<0.6
+  - simbricks-utils>=0.5.1,<0.6
+  # headers + static libs the corundum adapter links against
+  - simbricks-lib>=0.5.1,<0.6
+  # host simulator (simbricks-patched qemu) and switch
+  - simbricks-qemu-sim-bin>=0.5.1,<0.6
+  - simbricks-qemu-sim-py>=0.5.1,<0.6
+  - simbricks-net-base-sim-bin>=0.5.0,<0.6
+  - simbricks-net-base-sim-py>=0.5.0,<0.6
+  # toolchain for verilating corundum + building the adapter
+  - verilator=5
+  - make
+  - gxx_linux-64
+  # Newer sysroots (2.39 = AlmaLinux 10) tag crt1.o as needing x86-64-v3, so
+  # every binary we link would refuse to run on pre-AVX2 CloudLab nodes
+  # ("CPU ISA level is lower than required"). 2.28 targets baseline x86-64.
+  - sysroot_linux-64=2.28
