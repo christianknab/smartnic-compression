@@ -1,0 +1,16 @@
+services:
+  simbricks-dev:
+    build: .
+    platform: linux/amd64
+    container_name: simbricks-workspace
+    stdin_open: true
+    tty: true
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - simbricks-history:/root/.bash_history_dir
+    environment:
+      - HISTFILE=/root/.bash_history_dir/.bash_history
+
+volumes:
+  simbricks-history:

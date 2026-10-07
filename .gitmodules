@@ -1,0 +1,3 @@
+[submodule "component-corundum"]
+	path = component-corundum
+	url = https://github.com/simbricks/component-corundum.git
