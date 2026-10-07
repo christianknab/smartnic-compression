@@ -1,11 +1,12 @@
 services:
   simbricks-dev:
-    build: .
-    platform: linux/amd64
+    image: simbricks/simbricks:latest
     container_name: simbricks-workspace
     stdin_open: true
     tty: true
     working_dir: /workspace
+    devices:
+      - /dev/kvm:/dev/kvm
     volumes:
       - .:/workspace
       - simbricks-history:/root/.bash_history_dir
