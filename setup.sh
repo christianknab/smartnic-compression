@@ -12,6 +12,8 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SIMB_ROOT="${SIMB_ROOT:-$REPO/.simbricks}"
 CORUNDUM="$REPO/component-corundum"
+# Our Corundum application block (replaces the empty template one)
+APP_RTL="$REPO/nic-app/rtl"
 
 PACKER_VERSION=1.11.2
 # image-builder has no releases; pin the commit this setup was tested with.
@@ -64,23 +66,35 @@ step_env() {
 step_corundum() {
     log "Verilate Corundum + build simb_corundum"
     git -C "$REPO" submodule update --init --recursive
+    # Enable Corundum's application block and point verilator at ours. Passed
+    # by overriding VERILATOR so component-corundum's Makefile stays untouched.
+    # Only the interface datapath hooks are used, so the rest is switched off.
+    # APP_ID 0x535a0001 ("SZ" 0001).
+    local app_vflags="-GAPP_ENABLE=1 -GAPP_ID=1398407169 -GAPP_CTRL_ENABLE=0 \
+-GAPP_DMA_ENABLE=0 -GAPP_AXIS_DIRECT_ENABLE=0 -GAPP_AXIS_SYNC_ENABLE=0 \
+-GAPP_AXIS_IF_ENABLE=1 -GAPP_STAT_ENABLE=0 -y $APP_RTL"
     # component-corundum's Makefile doesn't track RTL dependencies: once
-    # obj_dir exists, edited Verilog is silently ignored. Force re-verilation.
+    # obj_dir exists, edited Verilog (or changed flags) is silently ignored.
+    # Force re-verilation.
     local vsrc="$CORUNDUM/corundum/obj_dir/Vmqnic_core_axi.cpp"
-    if [ -f "$vsrc" ] && [ -n "$(find "$CORUNDUM/corundum/fpga" \
+    local vflags_stamp="$CORUNDUM/corundum/obj_dir/.app_vflags"
+    if [ -f "$vsrc" ] && { [ "$(cat "$vflags_stamp" 2>/dev/null)" != "$app_vflags" ] ||
+            [ -n "$(find "$CORUNDUM/corundum/fpga" "$APP_RTL" \
             \( -name '*.v' -o -name '*.sv' -o -name '*.svh' -o -name '*.vh' \) \
-            -newer "$vsrc" -print -quit)" ]; then
-        echo "RTL changed since last build -> re-verilating"
+            -newer "$vsrc" -print -quit)" ]; }; then
+        echo "RTL or verilator flags changed since last build -> re-verilating"
         rm -rf "$CORUNDUM/corundum/obj_dir" "$CORUNDUM/adapter/corundum_simbricks_adapter"
     fi
     # shellcheck disable=SC2016  # expanded inside the env
     in_env bash -c '
         set -eu
         make -C "$1" corundum-install -j"$(nproc)" PREFIX="$CONDA_PREFIX" \
-            SIMBRICKS_INC_DIR="$CONDA_PREFIX/include" SIMBRICKS_LIB_DIR="$CONDA_PREFIX/lib"
+            SIMBRICKS_INC_DIR="$CONDA_PREFIX/include" SIMBRICKS_LIB_DIR="$CONDA_PREFIX/lib" \
+            VERILATOR="verilator $2"
         # --no-deps: simbricks-orchestration etc. already come from conda
         python -m pip install -q --no-deps -e "$1/corundum_sys_py" -e "$1/corundum_sim_rtl_py"
-    ' _ "$CORUNDUM"
+    ' _ "$CORUNDUM" "$app_vflags"
+    echo "$app_vflags" > "$vflags_stamp"
 }
 
 step_image() {
