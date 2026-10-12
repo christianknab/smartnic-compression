@@ -1,3 +1,9 @@
 [submodule "component-corundum"]
 	path = component-corundum
 	url = https://github.com/simbricks/component-corundum.git
+[submodule "xk264"]
+ 	path = compress_decompress/xk264
+ 	url = https://github.com/openasic-org/xk264.git
+[submodule "video-media-samples"]
+	path = compress_decompress/video-media-samples
+	url = https://github.com/chthomos/video-media-samples.git
