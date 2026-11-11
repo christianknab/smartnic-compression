@@ -563,6 +563,7 @@ wire        zfp_csum_cmd_ready;
 
 zfp_tx_codec #(
     .UDP_PORT(`ZFP_UDP_PORT),
+    .DSCP(`ZFP_DSCP),
     .BLOCK_BITS(`ZFP_BLOCK_BITS),
     .CSUM_ENABLE(TX_CHECKSUM_ENABLE),
     .DATA_WIDTH(AXIS_DATA_WIDTH),

@@ -28,6 +28,8 @@ import sys
 from pathlib import Path
 
 UDP_PORT = 5555
+DSCP = 13
+TOS_MARK = DSCP << 2
 CODEC_HDR_BYTES = 6
 MIN_PAYLOAD = 16
 VERSION = 1
@@ -129,7 +131,7 @@ def tx_model(f: bytes, cmd: tuple[int, int, int], w: int) -> tuple[bytes, bool]:
     hit = False
     if u is not None:
         pl_len = (u["udp_len"] - 8) & 0xFFFF
-        hit = (not u["flags"] & 0x8000 and pl_len % 4 == 0 and
+        hit = (f[15] >> 2 == DSCP and not u["flags"] & 0x8000 and pl_len % 4 == 0 and
                u["udp_len"] >= 8 + MIN_PAYLOAD)
     if not hit:
         return tx_checksum(f, *cmd), False
@@ -182,9 +184,10 @@ def eth(ethertype: int, body: bytes) -> bytes:
     return DST_MAC + SRC_MAC + ethertype.to_bytes(2, "big") + body
 
 
-def ipv4(proto: int, l4: bytes, flags: int = 0x4000, ident: int = 0) -> bytes:
+def ipv4(proto: int, l4: bytes, flags: int = 0x4000, ident: int = 0, tos: int = 0) -> bytes:
     h = bytearray(20)
     h[0] = 0x45
+    h[1] = tos
     h[2:4] = (20 + len(l4)).to_bytes(2, "big")
     h[4:6] = ident.to_bytes(2, "big")
     h[6:8] = flags.to_bytes(2, "big")
@@ -197,13 +200,15 @@ def ipv4(proto: int, l4: bytes, flags: int = 0x4000, ident: int = 0) -> bytes:
 
 
 def udp_frame(payload: bytes, dport: int = UDP_PORT, flags: int = 0x4000,
-              ident: int = 0, offload: bool = True) -> tuple[bytes, tuple]:
-    """A UDP frame as the host hands it to the NIC. With offload the checksum
-    field holds the pseudo-header sum and the command asks for the rest."""
+              ident: int = 0, offload: bool = True,
+              tos: int = TOS_MARK) -> tuple[bytes, tuple]:
+    """A UDP frame as the host hands it to the NIC, by default marked for
+    compression. With offload the checksum field holds the pseudo-header sum
+    and the command asks for the rest."""
     udp_len = 8 + len(payload)
     l4 = (40000).to_bytes(2, "big") + dport.to_bytes(2, "big") + \
         udp_len.to_bytes(2, "big") + b"\0\0" + payload
-    f = bytearray(eth(0x0800, ipv4(17, l4, flags, ident)))
+    f = bytearray(eth(0x0800, ipv4(17, l4, flags, ident, tos)))
     if offload:
         f[40:42] = pseudo_sum(bytes(f[14:34]), 17, udp_len).to_bytes(2, "big")
         return bytes(f), (1, 34, 40)
@@ -230,10 +235,17 @@ def make_frames(rng: random.Random) -> list[tuple[str, bytes, tuple]]:
              127, 128, 200, 255, 256, 300, 367, 368]
     for i, n in enumerate(sizes):
         offload = i % 5 != 3  # some without checksum offload requested
-        f, cmd = udp_frame(float_payload(rng, n), ident=i, offload=offload)
-        frames.append((f"udp {4 * n}B" + ("" if offload else " no-offload"), f, cmd))
+        ecn = i % 4           # the ECN bits must not matter
+        f, cmd = udp_frame(float_payload(rng, n), ident=i, offload=offload,
+                           tos=TOS_MARK | ecn)
+        frames.append((f"udp {4 * n}B" + ("" if offload else " no-offload") +
+                       (f" ecn{ecn}" if ecn else ""), f, cmd))
 
     # must pass through untouched
+    f, cmd = udp_frame(float_payload(rng, 32), tos=0)
+    frames.append(("no DSCP mark", f, cmd))
+    f, cmd = udp_frame(float_payload(rng, 32), tos=(DSCP + 1) << 2)
+    frames.append(("other DSCP", f, cmd))
     f, cmd = udp_frame(float_payload(rng, 32), dport=5556)
     frames.append(("other port", f, cmd))
     f, cmd = udp_frame(float_payload(rng, 32)[:-2])

@@ -13,6 +13,13 @@
 `define ZFP_UDP_PORT 16'd5555
 `endif
 
+// DSCP a packet must carry to be compressed (top 6 bits of the IPv4 TOS
+// byte). The sending app opts in per socket with
+// setsockopt(IPPROTO_IP, IP_TOS, ZFP_DSCP << 2). 13 is unassigned.
+`ifndef ZFP_DSCP
+`define ZFP_DSCP 6'd13
+`endif
+
 // compressed bits per block of 4 fp32 values (21, 29 or 45)
 `ifndef ZFP_BLOCK_BITS
 `define ZFP_BLOCK_BITS 29

@@ -17,8 +17,9 @@ import struct
 import sys
 import time
 
-PORT = 5555         # must match CODEC_UDP_PORT in nic-app/rtl/mqnic_app_block.v
+PORT = 5555
 OTHER_PORT = 5556
+DSCP = 13
 
 # (port, payload bytes, expected result)
 CASES = [
@@ -98,6 +99,8 @@ def recv() -> None:
 
 def send(ip: str) -> None:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # opt this socket's datagrams in to NIC compression
+    s.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, DSCP << 2)
     for idx, (port, nbytes, kind) in enumerate(CASES):
         s.sendto(payload(idx), (ip, port))
         print(f"send: case {idx} -> port {port}, {nbytes} B, expect {kind}", flush=True)

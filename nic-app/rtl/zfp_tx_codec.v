@@ -8,7 +8,8 @@
  * ZFP compression of UDP payloads on the TX path, ahead of mqnic_egress (TX
  * checksum offload).
  *
- * An unfragmented IPv4/UDP packet to UDP_PORT whose payload is a whole number of
+ * An unfragmented IPv4/UDP packet to UDP_PORT, marked with DSCP (the sending
+ * app sets it per socket with IP_TOS), whose payload is a whole number of
  * fp32 values (at least MIN_PAYLOAD bytes) is compressed in blocks of 4 values,
  * each of which zfp_encode turns into BLOCK_BITS bits. A partial last block is
  * padded with zeros. The compressed UDP payload is
@@ -35,6 +36,8 @@
 module zfp_tx_codec #
 (
     parameter [15:0] UDP_PORT = 16'd5555,
+    // DSCP (top 6 bits of the IPv4 TOS byte) that opts a packet in
+    parameter [5:0] DSCP = 6'd13,
     // compressed bits per block of 4 values
     parameter BLOCK_BITS = 29,
     // mqnic_egress does TX checksum offload (consumes the checksum commands)
@@ -220,6 +223,7 @@ endgenerate
 
 wire [15:0] eth_type   = {hb[12], hb[13]};
 wire [7:0]  ip_ver_ihl = hb[14];
+wire [5:0]  ip_dscp    = hb[15][7:2];  // [1:0] are ECN, which the network may change
 wire [15:0] ip_len     = {hb[16], hb[17]};
 wire [15:0] ip_flags   = {hb[20], hb[21]};  // reserved, DF, MF, fragment offset
 wire [7:0]  ip_proto   = hb[23];
@@ -234,7 +238,7 @@ wire udp_pkt = !hdr_last_reg && eth_type == 16'h0800 && ip_ver_ihl == 8'h45 &&
 wire [15:0] pl_len = udp_len - 16'd8;
 
 // this packet gets compressed
-wire hit = udp_pkt && !ip_flags[15] && pl_len[1:0] == 2'd0 && udp_len >= 16'd8 + MIN_PAYLOAD;
+wire hit = udp_pkt && ip_dscp == DSCP && !ip_flags[15] && pl_len[1:0] == 2'd0 && udp_len >= 16'd8 + MIN_PAYLOAD;
 
 wire [15:0] n_words = ({1'b0, pl_len} + 17'd7) >> 3;
 wire [15:0] n_blocks = ({1'b0, pl_len} + 17'd15) >> 4;

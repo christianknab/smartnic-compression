@@ -68,12 +68,13 @@ There are two kinds of modes
 
 `nic-app/rtl/` is our Corundum application block (`mqnic_app_block`), built into `simb_corundum` by `./setup.sh corundum` in place of Corundum's empty template. It sits on the interface datapath of both NICs as a bump in the wire: the sending NIC compresses, the receiving NIC decompresses, so the hosts and the `mqnic` driver never see compressed packets.
 
-UDP datagrams to port 5555 whose payload is a whole number of fp32 values (at least 16 bytes) are compressed with fixed-rate ZFP: every block of 4 floats becomes `W` bits (21, 29 or 45). Everything else (TCP, ARP, other ports, fragments) passes through untouched.
+UDP datagrams to port 5555 that are marked with DSCP=13 and whose payload is a whole number of fp32 values (at least 16 bytes) are compressed. The sending app opts in per socket with `setsockopt(IPPROTO_IP, IP_TOS, 13 << 2)` (the ECN bits are ignored); the same traffic without the mark goes out uncompressed. Packets are compressed with fixed-rate ZFP: every block of 4 floats becomes `W` bits (21, 29 or 45). Everything else (TCP, ARP, other ports, fragments) passes through untouched.
 
 - **TX**: `zfp_tx_codec.v`, spliced into our copy of `mqnic_interface_tx.v` between the DMA read stream and Corundum's TX checksum offload. The compressed size follows from the header alone, so it rewrites the IP/UDP lengths and IP checksum up front and streams the packet through; it then hands Corundum a checksum command so the UDP checksum covers the compressed packet. Compressed packets are marked with the IP reserved flag bit.
 - **RX**: `zfp_rx_codec.v`, in `mqnic_app_block.v` ahead of Corundum's RX checksum. It decodes the blocks, restores the original header and sets the UDP checksum to 0 (lossy data can never match the sender's checksum).
 - **Wire format**: the compressed UDP payload starts with a 6-byte header (original length, `W`, version) followed by the packed blocks, LSB first. See the top of `zfp_tx_codec.v`.
-- **Settings**: port and `W` are in `zfp_config.vh`; both NICs must use the same values.
+- **Which packets get decompressed**: RX doesn't look at the DSCP. TX sets the IP reserved flag bit on every packet it compresses, and RX decompresses only packets with that bit and a valid codec header, then clears the bit.
+- **Settings**: port, DSCP and `W` are in `zfp_config.vh`; both NICs must use the same port and `W`.
 - **Encoder/decoder**: `zfp_encode.v` / `zfp_decode.v` are placeholders (they keep the top `W/4` bits of each float) to be replaced by the real ZFP modules with the same ports: 4 floats in (value 0 in bits [31:0]), `W` bits out, `out_valid` a fixed number of cycles after `in_valid`, no stall input. The wrappers handle any latency.
 
 Packets are handled one at a time, with about 7 idle cycles per packet while the header is buffered.

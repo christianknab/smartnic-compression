@@ -16,6 +16,10 @@
  * match). The output is trimmed to the original length, which drops the
  * padding of a partial last block as well as any Ethernet padding.
  *
+ * The DSCP opt-in is a TX-side control only: the reserved flag bit plus the
+ * codec header are what mark a packet as compressed, so the DSCP is not checked
+ * here (and is left as it is).
+ *
  * Everything else passes through untouched. Assumes no VLAN tag and no IP
  * options. Packets are handled one at a time; the first HDR_BEATS beats are
  * buffered to decide what to do with a packet.

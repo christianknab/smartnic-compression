@@ -101,6 +101,7 @@ logic [0:0]  o_tuser;
 
 zfp_tx_codec #(
     .UDP_PORT(`ZFP_UDP_PORT),
+    .DSCP(`ZFP_DSCP),
     .BLOCK_BITS(`ZFP_BLOCK_BITS),
     .CSUM_ENABLE(1),
     .DATA_WIDTH(64),
