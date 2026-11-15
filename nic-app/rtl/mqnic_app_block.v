@@ -9,12 +9,14 @@
 `timescale 1ns / 1ps
 `default_nettype none
 
+`include "zfp_config.vh"
+
 /*
  * Application block
  *
  * Copy of corundum/fpga/app/template/rtl/mqnic_app_block.v. The only change is
  * the interface datapath (see "Ethernet (internal at interface module)"),
- * which runs fp32 -> bf16 truncation of UDP payloads (trunc_codec.v).
+ * which runs ZFP decompression of UDP payloads on RX (zfp_rx_codec.v).
  */
 module mqnic_app_block #
 (
@@ -602,8 +604,6 @@ initial begin
     end
 end
 
-// UDP destination port whose payload (float32 array) gets truncated to bf16
-localparam [15:0] CODEC_UDP_PORT = 16'd5555;
 
 /*
  * AXI-Lite slave interface (control from host)
@@ -749,51 +749,29 @@ assign m_axis_sync_rx_tuser = s_axis_sync_rx_tuser;
 /*
  * Ethernet (internal at interface module)
  *
- * Bump in the wire: compress on the way out (after the TX engine and its
- * checksum offload), decompress on the way in (before the RX engine and its
- * checksum/hash), so the host stack only ever sees uncompressed packets.
+ * TX passes straight through: compression happens earlier, ahead of TX
+ * checksum offload (zfp_tx_codec in nic-app/rtl/mqnic_interface_tx.v). RX
+ * decompresses here, before the RX engine and its checksum/hash, so the host
+ * stack only ever sees uncompressed packets.
  */
+assign m_axis_if_tx_tdata = s_axis_if_tx_tdata;
+assign m_axis_if_tx_tkeep = s_axis_if_tx_tkeep;
+assign m_axis_if_tx_tvalid = s_axis_if_tx_tvalid;
+assign s_axis_if_tx_tready = m_axis_if_tx_tready;
+assign m_axis_if_tx_tlast = s_axis_if_tx_tlast;
+assign m_axis_if_tx_tid = s_axis_if_tx_tid;
+assign m_axis_if_tx_tdest = s_axis_if_tx_tdest;
+assign m_axis_if_tx_tuser = s_axis_if_tx_tuser;
+
 generate
 
 genvar n;
 
 for (n = 0; n < IF_COUNT; n = n + 1) begin : codec
 
-    trunc_codec #(
-        .DECOMPRESS(0),
-        .UDP_PORT(CODEC_UDP_PORT),
-        .DATA_WIDTH(AXIS_IF_DATA_WIDTH),
-        .KEEP_WIDTH(AXIS_IF_KEEP_WIDTH),
-        .ID_WIDTH(AXIS_IF_TX_ID_WIDTH),
-        .DEST_WIDTH(AXIS_IF_TX_DEST_WIDTH),
-        .USER_WIDTH(AXIS_IF_TX_USER_WIDTH)
-    )
-    tx_compress_inst (
-        .clk(clk),
-        .rst(rst),
-
-        .s_axis_tdata(s_axis_if_tx_tdata[n*AXIS_IF_DATA_WIDTH +: AXIS_IF_DATA_WIDTH]),
-        .s_axis_tkeep(s_axis_if_tx_tkeep[n*AXIS_IF_KEEP_WIDTH +: AXIS_IF_KEEP_WIDTH]),
-        .s_axis_tvalid(s_axis_if_tx_tvalid[n]),
-        .s_axis_tready(s_axis_if_tx_tready[n]),
-        .s_axis_tlast(s_axis_if_tx_tlast[n]),
-        .s_axis_tid(s_axis_if_tx_tid[n*AXIS_IF_TX_ID_WIDTH +: AXIS_IF_TX_ID_WIDTH]),
-        .s_axis_tdest(s_axis_if_tx_tdest[n*AXIS_IF_TX_DEST_WIDTH +: AXIS_IF_TX_DEST_WIDTH]),
-        .s_axis_tuser(s_axis_if_tx_tuser[n*AXIS_IF_TX_USER_WIDTH +: AXIS_IF_TX_USER_WIDTH]),
-
-        .m_axis_tdata(m_axis_if_tx_tdata[n*AXIS_IF_DATA_WIDTH +: AXIS_IF_DATA_WIDTH]),
-        .m_axis_tkeep(m_axis_if_tx_tkeep[n*AXIS_IF_KEEP_WIDTH +: AXIS_IF_KEEP_WIDTH]),
-        .m_axis_tvalid(m_axis_if_tx_tvalid[n]),
-        .m_axis_tready(m_axis_if_tx_tready[n]),
-        .m_axis_tlast(m_axis_if_tx_tlast[n]),
-        .m_axis_tid(m_axis_if_tx_tid[n*AXIS_IF_TX_ID_WIDTH +: AXIS_IF_TX_ID_WIDTH]),
-        .m_axis_tdest(m_axis_if_tx_tdest[n*AXIS_IF_TX_DEST_WIDTH +: AXIS_IF_TX_DEST_WIDTH]),
-        .m_axis_tuser(m_axis_if_tx_tuser[n*AXIS_IF_TX_USER_WIDTH +: AXIS_IF_TX_USER_WIDTH])
-    );
-
-    trunc_codec #(
-        .DECOMPRESS(1),
-        .UDP_PORT(CODEC_UDP_PORT),
+    zfp_rx_codec #(
+        .UDP_PORT(`ZFP_UDP_PORT),
+        .BLOCK_BITS(`ZFP_BLOCK_BITS),
         .DATA_WIDTH(AXIS_IF_DATA_WIDTH),
         .KEEP_WIDTH(AXIS_IF_KEEP_WIDTH),
         .ID_WIDTH(AXIS_IF_RX_ID_WIDTH),

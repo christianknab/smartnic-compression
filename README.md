@@ -68,12 +68,26 @@ There are two kinds of modes
 
 `nic-app/rtl/` is our Corundum application block (`mqnic_app_block`), built into `simb_corundum` by `./setup.sh corundum` in place of Corundum's empty template. It sits on the interface datapath of both NICs as a bump in the wire: the sending NIC compresses, the receiving NIC decompresses, so the hosts and the `mqnic` driver never see compressed packets.
 
-`trunc_codec.v` is a simple test that does fp32 -> bf16 precision truncation of UDP datagrams to port 5555: the low 16 bits of every float are dropped on the wire and come back as zeros. Everything else (TCP, ARP, other ports) passes through untouched. To check it end to end:
+UDP datagrams to port 5555 that are marked with DSCP=13 and whose payload is a whole number of fp32 values (at least 16 bytes) are compressed. The sending app opts in per socket with `setsockopt(IPPROTO_IP, IP_TOS, 13 << 2)` (the ECN bits are ignored); the same traffic without the mark goes out uncompressed. Packets are compressed with fixed-rate ZFP: every block of 4 floats becomes `W` bits (21, 29 or 45). Everything else (TCP, ARP, other ports, fragments) passes through untouched.
+
+- **TX**: `zfp_tx_codec.v`, spliced into our copy of `mqnic_interface_tx.v` between the DMA read stream and Corundum's TX checksum offload. The compressed size follows from the header alone, so it rewrites the IP/UDP lengths and IP checksum up front and streams the packet through; it then hands Corundum a checksum command so the UDP checksum covers the compressed packet. Compressed packets are marked with the IP reserved flag bit.
+- **RX**: `zfp_rx_codec.v`, in `mqnic_app_block.v` ahead of Corundum's RX checksum. It decodes the blocks, restores the original header and sets the UDP checksum to 0 (lossy data can never match the sender's checksum).
+- **Wire format**: the compressed UDP payload starts with a 6-byte header (original length, `W`, version) followed by the packed blocks, LSB first. See the top of `zfp_tx_codec.v`.
+- **Which packets get decompressed**: RX doesn't look at the DSCP. TX sets the IP reserved flag bit on every packet it compresses, and RX decompresses only packets with that bit and a valid codec header, then clears the bit.
+- **Settings**: port, DSCP and `W` are in `zfp_config.vh`; both NICs must use the same port and `W`.
+- **Encoder/decoder**: `zfp_encode.v` / `zfp_decode.v` are placeholders (they keep the top `W/4` bits of each float) to be replaced by the real ZFP modules with the same ports: 4 floats in (value 0 in bits [31:0]), `W` bits out, `out_valid` a fixed number of cycles after `in_valid`, no stall input. The wrappers handle any latency.
+
+Packets are handled one at a time, with about 7 idle cycles per packet while the header is buffered.
+
+Testbench (TX codec -> Corundum's unmodified checksum block -> RX codec, random gaps and stalls, every frame compared byte for byte against a Python model):
 
 ```sh
-simbricks-run --verbose experiments/trunc_udp.py
-scripts/show_output.py -s host0 -g recv:     # PASS/FAIL per datagram + RESULT line
-tcpdump -nn -r out/trunc-nosync/2/switch.pcap udp # show the data length captured
+nic-app/tb/run.sh          # all W x placeholder latencies; output in nic-app/tb/build/
+nic-app/tb/run.sh 29 1     # one configuration
 ```
+
+When the real encoder/decoder go in, `encode_block()`/`decode_block()` in `nic-app/tb/zfp_vectors.py` need a bit-exact model of them.
+
+`trunc_codec.v` (the earlier fp32 -> bf16 truncation test) is no longer built, so `experiments/trunc_udp.py` won't pass until it is reworked for ZFP.
 
 FYI, interrupted runs can leave sims running (sync-mode QEMU ignores SIGTERM). Check with `pgrep -af 'simb_|qemu-system'` and `kill -9` anything left running.

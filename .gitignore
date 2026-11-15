@@ -3,3 +3,5 @@
 # simbricks-run output
 out/
 __pycache__/
+# testbench output (nic-app/tb/run.sh)
+nic-app/tb/build/
