@@ -1,6 +1,7 @@
 module zfp_decomp (
     input  logic        clk,
     input  logic        rst,
+    input  logic        en,
     input  logic [7:0]  emax,
     input  logic [4:0]  max_pos,
     input  logic [31:0] comp_stream,
@@ -202,7 +203,7 @@ module zfp_decomp (
             valid_s3    <= 1'b0;
             d_out_valid <= 1'b0;
             for (int i=0; i<4; i++) d_out[i] <= '0;
-        end else begin
+        end else if(en) begin
             // Stage 1
             valid_s1 <= d_in_valid;
             emax_s1  <= emax;

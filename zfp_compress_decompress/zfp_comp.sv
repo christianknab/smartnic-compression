@@ -1,6 +1,7 @@
 module zfp_comp(
                 input  logic        clk,
                 input  logic        rst,
+                input  logic        en, 
                 input  logic [31:0] d_in [3:0],
                 input  logic [1:0]  max_bits, // 00 = 8, 01 = 16, 10 = 32, 11 = 8 
                 input  logic        d_in_valid,
@@ -62,7 +63,7 @@ module zfp_comp(
             comp_stream <= '0;
             d_out_valid <= 1'b0;
             count <= '0;
-        end else begin
+        end else if(en) begin
 
             if(d_in_valid)begin
                 count <= count + 1;

@@ -1,9 +1,10 @@
 module zfp_comp_axi
-#(
+import zfp_types_pkg::*;
+ #(
     parameter CHANNELS = 8,
     parameter PORT_COUNT = 8,
-    parameter AXIS_SYNC_KEEP_WIDTH = 8,
-    parameter AXIS_SYNC_DATA_WIDTH = 8,
+    parameter AXIS_SYNC_KEEP_WIDTH = AXIS_SYNC_DATA_WIDTH/8,
+    parameter AXIS_SYNC_DATA_WIDTH = 512,
     parameter AXIS_KEEP_WIDTH_32 = AXIS_SYNC_DATA_WIDTH/32,
     parameter AXIS_SYNC_TX_USER_WIDTH = 8,
     parameter BIT_WIDTH = 32,
@@ -11,7 +12,7 @@ module zfp_comp_axi
     parameter BUFFER_SLOTS = 6,
     parameter COMP_MODE_ORIGIN = 100,//find true avlue later
     parameter PTP_TS_WIDTH = 8,
-    parameter TX_TAG_WIDTH = 8,
+    parameter TX_TAG_WIDTH = 8
 
 )(
     input logic clk,
@@ -80,11 +81,6 @@ module zfp_comp_axi
 
 */
 
-typedef struct packed {
-    logic [7:0] exponent;
-    logic [4:0] max_pos;
-    logic [31:0] stream;
-} zfp_comp_data_t;
 
 genvar ports;
 genvar data_width;
@@ -131,7 +127,7 @@ always_ff @(posedge clk or posedge rst) begin
 
         if (is_first_beat) begin
             // 1. Load the initial tuser as-is
-            tuser_buffer[tuser_tail] <= s_axis_sync_tx_tuser;
+            tuser_buffer[tuser_tail[2:0]] <= s_axis_sync_tx_tuser;
             
             // 2. Lock in the current index for the rest of this packet
             cur_tuser <= tuser_tail;
@@ -144,7 +140,7 @@ always_ff @(posedge clk or posedge rst) begin
         end else begin
             // 4. On SUBSEQUENT beats, monitor for late bad_frame aborts
             if (s_axis_sync_tx_tuser[0]) begin
-                tuser_buffer[cur_tuser][0] <= 1'b1;
+                tuser_buffer[cur_tuser[2:0]][0] <= 1'b1;
             end
         end
 
@@ -174,32 +170,39 @@ generate
         logic in_valid;
         
         always_comb begin
+            // 1. Declare local variables at the top
+            int base_bit;
+            int byte_offset;
+
+            // 2. Apply DEFAULT assignments to prevent latches on all paths
+            base_bit = (data_width * ZFP_INPUT_SIZE); // Added missing '*' 
+            byte_offset = '0; 
             d_in = '{default: '0};
             word_valid = 4'b0;
+            in_valid = '0; 
             
-            // Base bit index taking the current PORT_COUNT loop into account
-            int base_bit = + (data_width * ZFP_INPUT_SIZE);
-
             // Mask out the first 48 bytes (Slices 0, 1, and 2) on the first beat
             if (is_first_beat && (data_width < 3)) begin
                 word_valid = 4'b0; 
             end else begin
                 for (int i = 0; i < 4; i++) begin
-                    int byte_offset = (data_width * 16) + (i * 4);
+                    // 3. Assign the pre-declared variable here
+                    byte_offset = (data_width * 16) + (i * 4); // Added missing '*'
                     
                     // Verify all 4 bytes of this specific float are valid in TKEEP
                     word_valid[i] = &s_axis_sync_tx_tkeep[byte_offset +: 4];
                     
                     if (word_valid[i]) begin
-                        d_in[i] = s_axis_sync_tx_tdata[base_bit + (i * 32) +: 32];
+                        d_in[i] = s_axis_sync_tx_tdata[base_bit + (i * 32) +: 32]; // Added missing '*'
                     end
                 end
             end
             
+            // 4. Final conditional override
             in_valid = (axi_input_valid) ? |word_valid : '0;
         end
 
-        
+        /* verilator lint_off PINCONNECTEMPTY */
         zfp_comp comp_mod(
             .clk(clk),
             .rst(rst),
@@ -207,12 +210,13 @@ generate
             .d_in(d_in),
             .max_bits(comp_mode), // 00 = 8, 01 = 16, 10 = 32, 11 = 8 
             .d_in_valid(in_valid),
-            .exponent(zfp_comp[data_width].exponent),
-            .max_pos(zfp_comp[data_width].max_pos),
-            .comp_stream(zfp_comp[data_width].stream),
+            .exponent(zfp_comp_data[data_width].exponent),
+            .max_pos(zfp_comp_data[data_width].max_pos),
+            .comp_stream(zfp_comp_data[data_width].stream),
             .stream_len(),
             .d_out_valid(zfp_comp_valid[data_width])
         );
+        /* verilator lint_off PINCONNECTEMPTY */
 
 
     end
@@ -236,7 +240,7 @@ always_ff @(posedge clk or posedge rst) begin
     end else begin
         if (s_axis_sync_tx_tvalid && s_axis_sync_tx_tready && is_first_beat) begin
             // Directly copy the first 42 bytes of this port's stream
-            header_buffer[0] <= s_axis_sync_tx_tdata[0 +: 336];
+            header_buffer[0] <= s_axis_sync_tx_tdata[0 +: 384];
             header_valid[0]  <= 1'b1;
             last_buffer[0] <= s_axis_sync_tx_tlast;
         end else begin
@@ -273,10 +277,10 @@ gear_box zfp_gear(
     .valid_in(zfp_block_out_valid),
     .header(header_buffer[3]),
     .header_valid(header_valid[3]),
-    .in0(zfp_comp[0]), 
-    .in1(zfp_comp[1]), 
-    .in2(zfp_comp[2]), 
-    .in3(zfp_comp[3]),
+    .in0(zfp_comp_data[0]), 
+    .in1(zfp_comp_data[1]), 
+    .in2(zfp_comp_data[2]), 
+    .in3(zfp_comp_data[3]),
     .in_x_valid(zfp_comp_valid),
     .width_mode(header_buffer[3][358 +: 2]), // check endian mode, maybe make a type for the header
     .last_of_frame(last_buffer[3]),
@@ -311,11 +315,13 @@ logic [1:0] comp_mode_buffer [BUFFER_SLOTS-1:0];
 
 logic can_send, data_read; 
 
-assign can_send = output_buffer_valid[o_front_ptr] && output_buffer_valid[o_front_ptr + 1];
+assign can_send = output_buffer_valid[o_front_ptr[3:0]] && output_buffer_valid[o_front_ptr[3:0] + 1];
 
 assign data_read = m_axis_sync_tx_tvalid & m_axis_sync_tx_tready;
 
 assign buff_full = o_tail_ptr_nxt[$clog2(3*PTP_TS_WIDTH)-1:0]+1 >= o_front_ptr[$clog2(3*PTP_TS_WIDTH)-1:0];
+assign o_tail_ptr_nxt =o_tail_ptr + 1;
+assign comp_mode = s_axis_sync_tx_tdata[COMP_MODE_ORIGIN +:2];
 
 always_ff @(posedge clk or posedge rst)begin
     if(rst)begin
@@ -326,7 +332,6 @@ always_ff @(posedge clk or posedge rst)begin
         output_mask_buffer <= '{default: '0};
         output_last_frame_buffer <= '{default: '0};
 
-        m_axis_sync_tx_cpl_valid <= '{default: '0};
         m_axis_sync_tx_tvalid <= '0;
         m_axis_sync_tx_tlast <= '0;
         m_axis_sync_tx_tkeep <= '0;
@@ -341,16 +346,16 @@ always_ff @(posedge clk or posedge rst)begin
             end
 
             if(f_data_valid)begin
-                output_buffer[o_tail_ptr] <= formatted_comp_data;
-                output_mask_buffer[o_tail_ptr] <= f_data_mask;
-                output_buffer_valid[o_tail_ptr] <= 1'b1;
-                output_last_frame_buffer[o_tail_ptr] <= 1'b0;
+                output_buffer[o_tail_ptr[3:0]] <= formatted_comp_data;
+                output_mask_buffer[o_tail_ptr[3:0]] <= f_data_mask;
+                output_buffer_valid[o_tail_ptr[3:0]] <= 1'b1;
+                output_last_frame_buffer[o_tail_ptr[3:0]] <= 1'b0;
             end
             if(f_last_valid)begin
-                output_buffer[o_tail_ptr + 1] <= formatted_comp_data_last;
-                output_mask_buffer[o_tail_ptr+1] <= f_last_mask;
-                output_last_frame_buffer[o_tail_ptr+1] <= last_frame_sig;
-                output_buffer_valid[o_tail_ptr+1] <= 1'b1;
+                output_buffer[o_tail_ptr[3:0] + 1] <= formatted_comp_data_last;
+                output_mask_buffer[o_tail_ptr[3:0] + 1] <= f_last_mask;
+                output_last_frame_buffer[o_tail_ptr[3:0] + 1] <= last_frame_sig;
+                output_buffer_valid[o_tail_ptr[3:0] + 1] <= 1'b1;
             end
             
         end
@@ -365,12 +370,12 @@ always_ff @(posedge clk or posedge rst)begin
         if (~m_axis_sync_tx_tvalid || m_axis_sync_tx_tready) begin
             if (can_send) begin
                 o_front_ptr <= o_front_ptr + 2;
-                m_axis_sync_tx_tdata <= {output_buffer[o_front_ptr], output_buffer[o_front_ptr + 1]};
-                m_axis_sync_tx_tkeep <= {output_mask_buffer[o_front_ptr], output_mask_buffer[o_front_ptr+1]};
-                m_axis_sync_tx_tlast <= (output_last_frame_buffer[o_front_ptr] || output_last_frame_buffer[o_front_ptr + 1]);
+                m_axis_sync_tx_tdata <= {output_buffer[o_front_ptr[3:0] ], output_buffer[o_front_ptr + 1]};
+                m_axis_sync_tx_tkeep <= {output_mask_buffer[o_front_ptr[3:0] ], output_mask_buffer[o_front_ptr+1]};
+                m_axis_sync_tx_tlast <= (output_last_frame_buffer[o_front_ptr[3:0] ] || output_last_frame_buffer[o_front_ptr + 1]);
                 m_axis_sync_tx_tvalid <= 1'b1;
                 if(is_first_sent_beat)begin
-                    m_axis_sync_tx_tuser <= tuser_buffer[tuser_front];
+                    m_axis_sync_tx_tuser <= tuser_buffer[tuser_front[2:0]];
                     if (tuser_front == BUFFER_SLOTS - 1)
                         tuser_front <= '0;
                     else
@@ -403,13 +408,6 @@ endmodule
 
 
 
-typedef enum logic [1:0] {
-  WIDTH_21 = 2'b00,
-  WIDTH_29 = 2'b01,
-  WIDTH_45 = 2'b10
-} width_mode_t;
-
-
 
 /*
     1 cycle delay
@@ -423,203 +421,5 @@ typedef enum logic [1:0] {
 */
 
 
-module gear_box(
-    input logic clk,
-    input logic rst,
-    input logic en,
-    input logic valid_in,
-    input logic [383:0] header,
-    input logic header_valid,
-    input logic [44:0] in0, in1, in2, in3,
-    input logic [3:0] in_x_valid,
-    input width_mode_t width_mode,
-    input logic last_of_frame,
-    output logic [255:0] d_out,
-    output logic [31:0] output_mask,
-    output logic [255:0] last_frame,
-    output logic [31:0] last_frame_mask, 
-    output logic last_frame_valid,
-    output logic d_out_valid,
-    output logic last_frame_out);
 
 
-
-
-
-    logic [179:0] packed_data;
-    logic [7:0] valid_bits;
-    logic [511:0] data_buffer;
-    logic [8:0] accum_count;
-    logic [511:0] temp_buffer;
-    logic [5:0] input_size;
-    logic [8:0] next_accum_count;
-
-
-
-    bit_packer gear_packer(.in0(in0), .in1(in1), .in2(in2), .in3(in3), .in_valid(in_x_valid), .width_mode(width_mode), .packed_data(packed_data), .valid_bits(valid_bits));
-
-
-    always_ff @(posedge clk or posedge rst)begin
-        if(rst)begin
-            data_buffer <= '0;
-            accum_count <= '0;
-            output_mask <= '0;
-            last_frame_mask <= 0;
-            d_out <= 0;
-            last_frame <= 0;
-            last_frame_out <= 0;
-            last_frame_valid <= '0;
-        end else if(en) begin
-            d_out_valid <= 1'b0;
-            last_frame_out <= last_of_frame;
-            if(valid_in)begin
-                if(header_valid)begin
-                    d_out <= header[255:0];
-                    d_out_valid <= 1'b1;
-                    output_mask <= '1;
-                    //128 of header, 21,
-                    if(~last_of_frame)begin 
-                        data_buffer <= temp_buffer;
-                        accum_count <= next_accum_count;
-                    end else begin
-                        last_frame <= temp_buffer;
-                        last_frame_valid <= '1;
-                        data_buffer <= 0;
-                        accum_count <= 0;
-                        for(int i = 0; i < 32; i ++)begin
-                            if(i*8 < next_accum_count)begin
-                                last_frame_mask[i] <= 1'b1;
-                            end
-                        end
-                    end
-                end else begin
-                    if(~last_of_frame)begin
-                        if(accum_count + valid_bits >= 255)begin
-                            d_out <= temp_buffer[255:0];
-                            d_out_valid <= 1'b1;
-
-                            data_buffer <= temp_buffer>>256;
-
-                            accum_count <= (accum_count + valid_bits) - 256;
-                            output_mask <= '1;
-
-
-                        end else begin
-                            data_buffer <= temp_buffer;
-                            accum_count <= accum_count + valid_bits;
-
-                        end
-                    end else begin
-                        data_buffer <= 0;
-                        d_out_valid <= 1'b1;
-                        accum_count <= 0;
-                        if(accum_count + valid_bits >= 255)begin
-                            d_out <= temp_buffer[255:0];
-                            output_mask <= '1;
-                            last_frame <= temp_buffer>>256;
-
-                            for(int i = 0; i < 32; i ++)begin
-                                if(i*8 < next_accum_count-255)begin
-                                    last_frame_mask[i] <= 1'b1;
-                                end
-                            end
-                            last_frame_valid <= '1;
-                            
-
-
-                        end else begin
-                            d_out <= temp_buffer[255:0];
-                            for(int i = 0; i < 32; i ++)begin
-                                if(i*8 < next_accum_count)begin
-                                    output_mask[i] <= 1'b1;
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-
-        end
-    end
-
-    always_comb begin
-        if(~header_valid)begin
-            temp_buffer = data_buffer | (packed_data << accum_count);
-            next_accum_count = accum_count + valid_bits;
-        end else begin
-            case(width_mode)
-                WIDTH_21: begin
-                    temp_buffer = { 363'h0  , in3[20:0], header[383:256]};
-                    next_accum_count = 9'd149;
-                end
-                WIDTH_29: begin
-                    temp_buffer = { 355'h0  , in3[28:0], header[383:256]};
-                    next_accum_count = 9'd157;
-                end
-                WIDTH_45: begin 
-                    temp_buffer = { 349'h0  , in3, header[383:256]};
-                    next_accum_count = 9'd173;
-                end
-                default: begin 
-                    temp_buffer = 0;
-                    next_accum_count = 0;
-                end
-            endcase
-        end
-    
-    end
-
-endmodule
-
-
-
-module bit_packer(input logic [44:0] in0, in1, in2, in3,
-                  input logic [3:0] in_valid,
-                  input  width_mode_t width_mode,
-                  output logic [179:0] packed_data,
-                  output logic [7:0] valid_bits);
-
-
-    logic [44:0] mid0, mid1, mid2, mid3;
-
-    assign mid0 = (in_valid[0]) ? in0 : '0;
-    assign mid1 = (in_valid[1]) ? in1 : '0;
-    assign mid2 = (in_valid[2]) ? in2 : '0;
-    assign mid3 = (in_valid[3]) ? in3 : '0;
-
-    always_comb begin
-        valid_bits = '0;
-        packed_data = '0;
-        case(width_mode)
-            WIDTH_21:begin
-                for(int i = 0; i < 4; i ++)begin
-                    if(in_valid[i])begin
-                        valid_bits = valid_bits + 21;
-                    end
-                end
-                packed_data = {96'h0, in3[20:0],in2[20:0],in1[20:0],in0[20:0]};
-            end
-            WIDTH_29:begin
-                for(int i = 0; i < 4; i ++)begin
-                    if(in_valid[i])begin
-                        valid_bits = valid_bits + 29;
-                    end
-                end
-                packed_data = {64'h0, in3[28:0],in2[28:0],in1[28:0],in0[28:0]};
-            end
-            WIDTH_45:begin
-                for(int i = 0; i < 4; i ++)begin
-                    if(in_valid[i])begin
-                        valid_bits = valid_bits + 45;
-                    end
-                end
-                packed_data = {in3, in2, in1, in0};
-
-            end
-            default: begin
-                valid_bits = '0;
-                packed_data = '0;
-            end
-        endcase
-    end
-endmodule
