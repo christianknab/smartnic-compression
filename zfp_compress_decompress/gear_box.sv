@@ -48,79 +48,75 @@ import zfp_types_pkg::*;
             last_frame <= 0;
             last_frame_out <= 0;
             last_frame_valid <= '0;
+            d_out_valid <= '0;
         end else if(en) begin
+            // Default assignments to prevent sticky control signals
             d_out_valid <= 1'b0;
-            last_frame_out <= last_of_frame;
+            last_frame_valid <= 1'b0; 
+            last_frame_out <= 1'b0; // Only assert when valid_in and last_of_frame are true
+            
             if(valid_in)begin
+                last_frame_out <= last_of_frame;
+
                 if(header_valid)begin
                     d_out <= header[255:0];
                     d_out_valid <= 1'b1;
                     output_mask <= '1;
-                    //128 of header, 21,
+                    
                     if(~last_of_frame)begin 
                         data_buffer <= temp_buffer;
                         accum_count <= next_accum_count;
                     end else begin
                         last_frame <= temp_buffer[255:0];
-                        last_frame_valid <= '1;
+                        last_frame_valid <= 1'b1;
                         data_buffer <= 0;
                         accum_count <= 0;
+                        
+                        // Direct boolean assignment clears unused upper bits automatically
                         for(int i = 0; i < 32; i ++)begin
-                            if(i*8 < next_accum_count)begin
-                                last_frame_mask[i] <= 1'b1;
-                            end
+                            last_frame_mask[i] <= (i*8 < next_accum_count);
                         end
                     end
                 end else begin
                     if(~last_of_frame)begin
-                        if(accum_count + valid_bits >= 255)begin
+                        if(next_accum_count >= 256)begin // Fixed threshold
                             d_out <= temp_buffer[255:0];
                             d_out_valid <= 1'b1;
 
-                            data_buffer <= temp_buffer>>256;
-
-                            accum_count <= (accum_count + valid_bits) - 256;
+                            data_buffer <= temp_buffer >> 256;
+                            accum_count <= next_accum_count - 256;
                             output_mask <= '1;
-
-
                         end else begin
                             data_buffer <= temp_buffer;
-                            accum_count <= accum_count + valid_bits;
-
+                            accum_count <= next_accum_count;
                         end
                     end else begin
                         data_buffer <= 0;
-                        d_out_valid <= 1'b1;
                         accum_count <= 0;
-                        if(accum_count + valid_bits >= 255)begin
+                        d_out_valid <= 1'b1;
+                        
+                        if(next_accum_count >= 256)begin // Fixed threshold
                             d_out <= temp_buffer[255:0];
                             output_mask <= '1;
+                            
                             last_frame <= temp_buffer[511:256];
+                            last_frame_valid <= 1'b1;
 
                             for(int i = 0; i < 32; i ++)begin
-                                if(i*8 < {23'b0, next_accum_count}-255)begin
-                                    last_frame_mask[i] <= 1'b1;
-                                end
-                            end
-                            last_frame_valid <= '1;
-                            
-
-
+                            last_frame_mask[i] <= (i*8 < (int'(next_accum_count) - 256));                            end
                         end else begin
                             d_out <= temp_buffer[255:0];
+                            last_frame_mask <= '0; // Ensure spillover mask is clean
+                            
                             for(int i = 0; i < 32; i ++)begin
-                                if(i*8 < next_accum_count)begin
-                                    output_mask[i] <= 1'b1;
-                                end
+                                output_mask[i] <= (i*8 < next_accum_count);
                             end
                         end
                     end
                 end
             end
-
         end
     end
-
     always_comb begin
         if(~header_valid)begin
             temp_buffer = data_buffer | (512'(packed_data) << accum_count);

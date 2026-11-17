@@ -238,15 +238,20 @@ always_ff @(posedge clk or posedge rst) begin
         last_buffer <= '{default: '0};
         user_buffer <= '{default: '0};
     end else begin
-        if (s_axis_sync_tx_tvalid && s_axis_sync_tx_tready && is_first_beat) begin
+        if (s_axis_sync_tx_tvalid && s_axis_sync_tx_tready ) begin
             // Directly copy the first 42 bytes of this port's stream
-            header_buffer[0] <= s_axis_sync_tx_tdata[0 +: 384];
-            header_valid[0]  <= 1'b1;
-            last_buffer[0] <= s_axis_sync_tx_tlast;
-        end else begin
-            header_buffer[0] <= '0;
-            header_valid[0] <= 1'b0;
-        end
+            if(is_first_beat)begin
+                header_buffer[0] <= s_axis_sync_tx_tdata[0 +: 384];
+                header_valid[0]  <= 1'b1;
+            end else begin
+                header_buffer[0] <= '0;
+                header_valid[0] <= 1'b0;
+            end
+            if(s_axis_sync_tx_tlast)
+                last_buffer[0] <= 1'b1;
+            else 
+                last_buffer[0] <= 1'b0; 
+        end 
         
 
 
@@ -269,7 +274,7 @@ logic f_data_valid, f_last_valid, last_frame_sig;
 logic [31:0] f_data_mask, f_last_mask;
 
 logic zfp_block_out_valid;
-assign zfp_block_out_valid = (zfp_comp_valid != 0);
+assign zfp_block_out_valid = (zfp_comp_valid.or());
 gear_box zfp_gear(
     .clk(clk),
     .rst(rst),
@@ -296,101 +301,124 @@ gear_box zfp_gear(
 
 
 
-logic [255:0] output_buffer[8:0];
-logic [31:0] output_mask_buffer[8:0];
-logic output_last_frame_buffer [8:0];
+
 logic [8:0] output_buffer_valid;
 
 
 
 
-logic [$clog2(3*PTP_TS_WIDTH) : 0] capacity, end_of_frame;
-//front bit for tracking wrap around
-logic [4 : 0] o_front_ptr, o_tail_ptr, o_tail_ptr_nxt;
+
 logic [1:0] comp_mode;
 logic [1:0] comp_mode_buffer [BUFFER_SLOTS-1:0];
-
+assign comp_mode = s_axis_sync_tx_tdata[COMP_MODE_ORIGIN +: 2];
  
+// Fixed bounds: 4-bit pointers require 16 entries
+logic [255:0] output_buffer[15:0];
+logic [31:0] output_mask_buffer[15:0];
+logic output_last_frame_buffer[15:0];
 
+logic [4:0] o_front_ptr, o_tail_ptr;
+logic [4:0] buffer_count;
+logic [3:0] head_idx, head_next_idx;
+logic [3:0] tail_idx, tail_next_idx;
+logic has_odd_last, can_send;
 
-logic can_send, data_read; 
+// Clean FIFO pointer math
+assign buffer_count = o_tail_ptr - o_front_ptr;
+assign buff_full = (buffer_count >= 14); // Reserve space for up to 2 concurrent writes
 
-assign can_send = output_buffer_valid[o_front_ptr[3:0]] && output_buffer_valid[o_front_ptr[3:0] + 1];
+// Explicit indices to guarantee safe 4-bit wrap-around
+assign tail_idx = o_tail_ptr[3:0];
+assign tail_next_idx = o_tail_ptr[3:0] + 4'd1;
 
-assign data_read = m_axis_sync_tx_tvalid & m_axis_sync_tx_tready;
+assign head_idx = o_front_ptr[3:0];
+assign head_next_idx = o_front_ptr[3:0] + 4'd1;
 
-assign buff_full = o_tail_ptr_nxt[$clog2(3*PTP_TS_WIDTH)-1:0]+1 >= o_front_ptr[$clog2(3*PTP_TS_WIDTH)-1:0];
-assign o_tail_ptr_nxt =o_tail_ptr + 1;
-assign comp_mode = s_axis_sync_tx_tdata[COMP_MODE_ORIGIN +:2];
+// can_send evaluates true if we have 2+ blocks, OR 1 block that is the end of a frame
+assign has_odd_last = (buffer_count == 1) && output_last_frame_buffer[head_idx];
+assign can_send = (buffer_count >= 2) || has_odd_last;
 
-always_ff @(posedge clk or posedge rst)begin
+always_ff @(posedge clk or posedge rst) begin
     if(rst)begin
         output_buffer <= '{default: '0};
-        o_tail_ptr <= 0;
-        o_front_ptr <= 0;
-        capacity <= 0;
         output_mask_buffer <= '{default: '0};
         output_last_frame_buffer <= '{default: '0};
-
+        o_tail_ptr <= 0;
+        o_front_ptr <= 0;
+        
         m_axis_sync_tx_tvalid <= '0;
         m_axis_sync_tx_tlast <= '0;
         m_axis_sync_tx_tkeep <= '0;
-        output_buffer_valid <= '0;
         is_first_sent_beat <= 1'b1;
     end else begin
-        if(~buff_full)begin
-            if(f_data_valid && f_last_valid)begin
-                o_tail_ptr <= o_tail_ptr +2;
-            end else if (f_data_valid)begin
+        // --- Write Logic ---
+        if(~buff_full) begin
+            if(f_data_valid && f_last_valid) begin
+                o_tail_ptr <= o_tail_ptr + 2;
+                
+                output_buffer[tail_idx] <= formatted_comp_data;
+                output_mask_buffer[tail_idx] <= f_data_mask;
+                output_last_frame_buffer[tail_idx] <= 1'b0;
+                
+                output_buffer[tail_next_idx] <= formatted_comp_data_last;
+                output_mask_buffer[tail_next_idx] <= f_last_mask;
+                output_last_frame_buffer[tail_next_idx] <= last_frame_sig;
+                
+            end else if (f_data_valid) begin
                 o_tail_ptr <= o_tail_ptr + 1;
+                
+                output_buffer[tail_idx] <= formatted_comp_data;
+                output_mask_buffer[tail_idx] <= f_data_mask;
+                output_last_frame_buffer[tail_idx] <= 1'b0;
+                
+            end else if (f_last_valid) begin // Fallback in case last data arrives alone
+                o_tail_ptr <= o_tail_ptr + 1;
+                
+                output_buffer[tail_idx] <= formatted_comp_data_last;
+                output_mask_buffer[tail_idx] <= f_last_mask;
+                output_last_frame_buffer[tail_idx] <= last_frame_sig;
             end
-
-            if(f_data_valid)begin
-                output_buffer[o_tail_ptr[3:0]] <= formatted_comp_data;
-                output_mask_buffer[o_tail_ptr[3:0]] <= f_data_mask;
-                output_buffer_valid[o_tail_ptr[3:0]] <= 1'b1;
-                output_last_frame_buffer[o_tail_ptr[3:0]] <= 1'b0;
-            end
-            if(f_last_valid)begin
-                output_buffer[o_tail_ptr[3:0] + 1] <= formatted_comp_data_last;
-                output_mask_buffer[o_tail_ptr[3:0] + 1] <= f_last_mask;
-                output_last_frame_buffer[o_tail_ptr[3:0] + 1] <= last_frame_sig;
-                output_buffer_valid[o_tail_ptr[3:0] + 1] <= 1'b1;
-            end
-            
         end
 
+        // Track beat status
         if(m_axis_sync_tx_tvalid && m_axis_sync_tx_tready && m_axis_sync_tx_tlast)begin
             is_first_sent_beat <= 1'b1;
-        end else begin
+        end else if (m_axis_sync_tx_tvalid && m_axis_sync_tx_tready) begin
             is_first_sent_beat <= 1'b0;
         end
 
-        // Only update the output if we are idle, or if the downstream just accepted our data
+        // --- Read & Output Logic ---
         if (~m_axis_sync_tx_tvalid || m_axis_sync_tx_tready) begin
             if (can_send) begin
-                o_front_ptr <= o_front_ptr + 2;
-                m_axis_sync_tx_tdata <= {output_buffer[o_front_ptr[3:0] ], output_buffer[o_front_ptr + 1]};
-                m_axis_sync_tx_tkeep <= {output_mask_buffer[o_front_ptr[3:0] ], output_mask_buffer[o_front_ptr+1]};
-                m_axis_sync_tx_tlast <= (output_last_frame_buffer[o_front_ptr[3:0] ] || output_last_frame_buffer[o_front_ptr + 1]);
                 m_axis_sync_tx_tvalid <= 1'b1;
-                if(is_first_sent_beat)begin
+                
+                if (buffer_count >= 2) begin
+                    // Normal behavior: combine two 256-bit blocks into 512-bit
+                    o_front_ptr <= o_front_ptr + 2;
+                    m_axis_sync_tx_tdata <= {output_buffer[head_idx], output_buffer[head_next_idx]};
+                    m_axis_sync_tx_tkeep <= {output_mask_buffer[head_idx], output_mask_buffer[head_next_idx]};
+                    m_axis_sync_tx_tlast <= (output_last_frame_buffer[head_idx] || output_last_frame_buffer[head_next_idx]);
+                end else begin
+                    // Odd ending block: Pad the remaining 256 bits with zeroes
+                    o_front_ptr <= o_front_ptr + 1;
+                    m_axis_sync_tx_tdata <= {output_buffer[head_idx], 256'b0};
+                    m_axis_sync_tx_tkeep <= {output_mask_buffer[head_idx], 32'b0};
+                    m_axis_sync_tx_tlast <= 1'b1; // Force tlast
+                end
+
+                if(is_first_sent_beat) begin
                     m_axis_sync_tx_tuser <= tuser_buffer[tuser_front[2:0]];
                     if (tuser_front == BUFFER_SLOTS - 1)
                         tuser_front <= '0;
                     else
                         tuser_front <= tuser_front + 1;
-
                 end
             end else begin
                 m_axis_sync_tx_tvalid <= 1'b0;
             end
         end
-        
     end
-
 end
-
 
 
 

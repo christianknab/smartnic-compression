@@ -27,11 +27,12 @@ module reverse_gear_box import zfp_types_pkg::*; #(
     width_mode_t width_mode_buffer;
     gear_states_t state, next_state;
     logic [44:0] out4_int, out4_first, out4_comb;
-
+    logic [3:0] out_valid_int;
 
     
 
-    assign out4 = (state == S_FIRST) ? out4_first : out4_int; 
+    assign out4 = (header_valid) ? out4_first : out4_int; 
+    assign out_valid = (header_valid) ? 4'b1000 : out_valid_int;
 
     bit_unpacker gear_unpack(
         .packed_data(packed_data),
@@ -41,7 +42,7 @@ module reverse_gear_box import zfp_types_pkg::*; #(
         .out2(out2),
         .out3(out3),
         .out4(out4_int),
-        .out_valid(out_valid)
+        .out_valid(out_valid_int)
         
 
     );
@@ -55,7 +56,7 @@ module reverse_gear_box import zfp_types_pkg::*; #(
             width_mode_buffer <= WIDTH_45;
             packed_data <= '0;
             valid_bits <= '0;
-            header_valid <= 1'b1;
+            header_valid <= 1'b0;
             accum_bits <= '0;
             last_frame <= 0;
             state <= S_FIRST;
@@ -93,26 +94,35 @@ module reverse_gear_box import zfp_types_pkg::*; #(
                         endcase
                     end
                 end
+                
                 S_DURING:begin
                     if(valid_in && ready)begin
-                        
-
-                        accum_bits <= accum_bits + 512;
-
+                        // Process incoming 512 bits and outgoing 180 bits simultaneously
+                        accum_bits <= accum_bits + 512 - 180;
                         data_buffer <= temp_buffer >> 180;
+                        packed_data <= temp_buffer[179:0]; // Use temp_buffer to capture the newly appended bits
+                        valid_bits <= 8'd180; // Assuming valid_bits expects a count rather than all 1s
                         
-                        packed_data <= data_buffer[179:0];
-                        valid_bits <= '1;
                         if(last_of_packet)begin
                             state <= S_LAST;
                         end
-                    end
-                end
-                S_LAST: begin
-                    if(accum_bits > 180)begin
+                    end else if (accum_bits >= 180) begin
+                        // Upstream stalled, but we have enough buffered data to output a full block
+                        accum_bits <= accum_bits - 180;
                         data_buffer <= data_buffer >> 180;
                         packed_data <= data_buffer[179:0];
-                        valid_bits <= '1;
+                        valid_bits <= 8'd180;
+                    end else begin
+                        // Buffer starving, wait for valid_in
+                        valid_bits <= '0;
+                    end
+                end
+                
+                S_LAST: begin
+                    if(accum_bits >= 180)begin // Changed from > to >= to catch exact multiples
+                        data_buffer <= data_buffer >> 180;
+                        packed_data <= data_buffer[179:0];
+                        valid_bits <= 8'd180;
                         accum_bits <= accum_bits - 180;
                     end else if(accum_bits > 0)begin
                         data_buffer <= 0;
@@ -121,19 +131,21 @@ module reverse_gear_box import zfp_types_pkg::*; #(
                         accum_bits <= 0;
                         state <= S_FIRST;
                         last_frame <= 1;
+                    end else begin
+                        // Catch-all for when accum_bits hits exactly 0
+                        state <= S_FIRST;
+                        last_frame <= 1;
+                        valid_bits <= '0;
                     end 
                 end
+                
                 default:begin
-
+                    state <= S_FIRST;
                 end
-
             endcase
-
-
-
         end
-
     end
+
     
     always_comb begin
         logic [1:0] current_width;

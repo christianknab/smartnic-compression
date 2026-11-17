@@ -194,7 +194,9 @@ endgenerate
         m_axis_sync_rx_tdata = (header_valid_buf[3]) ? {header_buffer[3], flat_row_3} : flat_decomp_data;
         m_axis_sync_rx_tkeep = (header_valid_buf[3]) 
             ? { {48{1'b1}}, {16{decomp_data_valid[3]}} } 
-            : { {16{decomp_data_valid[0]}}, {16{decomp_data_valid[1]}}, {16{decomp_data_valid[2]}}, {16{decomp_data_valid[3]}} };        m_axis_sync_rx_tvalid = (decomp_data_valid != 0);
+            : { {16{decomp_data_valid[0]}}, {16{decomp_data_valid[1]}}, {16{decomp_data_valid[2]}}, {16{decomp_data_valid[3]}} };        
+            
+        m_axis_sync_rx_tvalid = (decomp_data_valid != 0);
         m_axis_sync_rx_tlast = last_frame_buff[3];
     end
 
