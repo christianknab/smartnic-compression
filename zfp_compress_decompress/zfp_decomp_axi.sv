@@ -129,7 +129,7 @@ generate
         .en(en),
         .emax(unpacked[j].exponent),
         .max_pos(unpacked[j].max_pos),
-        .comp_stream(unpacked[j].stream),
+        .comp_stream({<< {unpacked[j].stream}}),
         .stream_len(width_mode),
         .d_in_valid(unpacked_valid[j]),
         .d_out_valid(decomp_data_valid[j]),
@@ -155,6 +155,9 @@ endgenerate
             if(header_valid)begin
                 header_buffer[0] <= header;
                 header_valid_buf[0] <= header_valid;
+            end else begin
+                header_buffer[0] <= 0;
+                header_valid_buf[0] <= 0;
             end
             if(unpacked_valid != 0)
                 last_frame_buff[0] <= last_frame;
@@ -192,7 +195,7 @@ endgenerate
                   decompressed_data[3][1], 
                   decompressed_data[3][0]};
 
-        m_axis_sync_rx_tdata = (header_valid_buf[3]) ? {header_buffer[3], flat_row_3} : flat_decomp_data;
+        m_axis_sync_rx_tdata = (header_valid_buf[3]) ? { flat_row_3, header_buffer[3]} : flat_decomp_data;
         m_axis_sync_rx_tkeep = (header_valid_buf[3]) 
             ? { {48{1'b1}}, {16{decomp_data_valid[3]}} } 
             : { {16{decomp_data_valid[0]}}, {16{decomp_data_valid[1]}}, {16{decomp_data_valid[2]}}, {16{decomp_data_valid[3]}} };        

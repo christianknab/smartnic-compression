@@ -81,9 +81,9 @@ def zfp_1d_block_decompress_fixed(emax, max_bit_pos, bitstream):
     # Restore signs
     
     dec_coeffs = [c * s for c, s in zip(dec_c, signs)]
-    
+    print(f"dec coefs: {dec_coeffs}")
     c0, c1, c2, c3 = [c * 4 for c in dec_coeffs]
-    
+    print(f"c0: {c0}, c1: {c1}, c2: {c2}, c3: {c3}")
     s0 = (c0 + c2) >> 1; s1 = (c0 - c2) >> 1
     d0 = (c1 + c3) >> 1; d1 = (c1 - c3) >> 1
     x0 = (s0 + d0) >> 1; x1 = (s0 - d0) >> 1

@@ -83,6 +83,7 @@ module zfp_decomp (
         end
     end
 
+
     // Stage 2: Sign Restoration and Inverse Transform Pass 1
 
     logic signed [33:0] s_c   [1:0];
