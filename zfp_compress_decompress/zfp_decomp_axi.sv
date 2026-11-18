@@ -7,7 +7,8 @@ import zfp_types_pkg::*;
     parameter AXIS_KEEP_WIDTH_32 = AXIS_SYNC_DATA_WIDTH/32,
     parameter AXIS_SYNC_TX_USER_WIDTH = 8,
     parameter BUFFER_SLOTS = 4,
-    parameter AXIS_SYNC_RX_USER_WIDTH = 8
+    parameter AXIS_SYNC_RX_USER_WIDTH = 8,
+    parameter COMP_MODE_ORIGIN = 336
 )(
     input logic clk,
     input logic rst,

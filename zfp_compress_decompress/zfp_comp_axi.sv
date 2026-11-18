@@ -10,7 +10,7 @@ import zfp_types_pkg::*;
     parameter BIT_WIDTH = 32,
     parameter ZFP_INPUT_SIZE = BIT_WIDTH *4,
     parameter BUFFER_SLOTS = 6,
-    parameter COMP_MODE_ORIGIN = 100,//find true avlue later
+    parameter COMP_MODE_ORIGIN = 336,//find true avlue later
     parameter PTP_TS_WIDTH = 8,
     parameter TX_TAG_WIDTH = 8
 
@@ -117,17 +117,24 @@ logic is_first_beat, is_first_sent_beat;
 logic [AXIS_SYNC_TX_USER_WIDTH-1:0] tuser_buffer [BUFFER_SLOTS-1:0];
 logic [$clog2(BUFFER_SLOTS):0] tuser_front, tuser_tail, cur_tuser;
 
+logic [1:0] comp_mode;
+logic [1:0] comp_mode_buffer [3:0];
+logic [1:0] comp_mode_latch;
+assign comp_mode = (is_first_beat) ? s_axis_sync_tx_tdata[COMP_MODE_ORIGIN +: 2] : comp_mode_latch;
+
 always_ff @(posedge clk or posedge rst) begin
     if (rst) begin
         is_first_beat <= 1'b1;
         tuser_front <= '0;
         tuser_tail  <= '0;
         cur_tuser   <= '0;
+        comp_mode_latch <= 0;
     end else if (axi_input_valid) begin
 
         if (is_first_beat) begin
             // 1. Load the initial tuser as-is
             tuser_buffer[tuser_tail[2:0]] <= s_axis_sync_tx_tuser;
+            comp_mode_latch <= s_axis_sync_tx_tdata[COMP_MODE_ORIGIN +: 2];
             
             // 2. Lock in the current index for the rest of this packet
             cur_tuser <= tuser_tail;
@@ -143,7 +150,7 @@ always_ff @(posedge clk or posedge rst) begin
                 tuser_buffer[cur_tuser[2:0]][0] <= 1'b1;
             end
         end
-
+        
         // Track packet boundaries
         if (s_axis_sync_tx_tlast)
             is_first_beat <= 1'b1; 
@@ -243,6 +250,7 @@ always_ff @(posedge clk or posedge rst) begin
             if(is_first_beat)begin
                 header_buffer[0] <= s_axis_sync_tx_tdata[0 +: 384];
                 header_valid[0]  <= 1'b1;
+                comp_mode_buffer[0] <= s_axis_sync_tx_tdata[COMP_MODE_ORIGIN +: 2];
             end else begin
                 header_buffer[0] <= '0;
                 header_valid[0] <= 1'b0;
@@ -259,6 +267,7 @@ always_ff @(posedge clk or posedge rst) begin
             header_buffer[i] <= header_buffer[i-1];
             header_valid[i] <= header_valid[i-1];
             last_buffer[i] <= last_buffer[i-1];
+            comp_mode_buffer[i] <= comp_mode_buffer[i-1];
         end
             // Add else-if logic here to clear header_valid[p] once written to output packer
     end
@@ -287,7 +296,7 @@ gear_box zfp_gear(
     .in2(zfp_comp_data[2]), 
     .in3(zfp_comp_data[3]),
     .in_x_valid(zfp_comp_valid),
-    .width_mode(header_buffer[3][358 +: 2]), // check endian mode, maybe make a type for the header
+    .width_mode(comp_mode_buffer[3]), // check endian mode, maybe make a type for the header
     .last_of_frame(last_buffer[3]),
     .d_out(formatted_comp_data),
     .output_mask(f_data_mask),
@@ -308,9 +317,7 @@ logic [8:0] output_buffer_valid;
 
 
 
-logic [1:0] comp_mode;
-logic [1:0] comp_mode_buffer [BUFFER_SLOTS-1:0];
-assign comp_mode = s_axis_sync_tx_tdata[COMP_MODE_ORIGIN +: 2];
+
  
 // Fixed bounds: 4-bit pointers require 16 entries
 logic [255:0] output_buffer[15:0];
@@ -395,8 +402,8 @@ always_ff @(posedge clk or posedge rst) begin
                 if (buffer_count >= 2) begin
                     // Normal behavior: combine two 256-bit blocks into 512-bit
                     o_front_ptr <= o_front_ptr + 2;
-                    m_axis_sync_tx_tdata <= {output_buffer[head_idx], output_buffer[head_next_idx]};
-                    m_axis_sync_tx_tkeep <= {output_mask_buffer[head_idx], output_mask_buffer[head_next_idx]};
+                    m_axis_sync_tx_tdata <= {output_buffer[head_next_idx], output_buffer[head_idx]};
+                    m_axis_sync_tx_tkeep <= {output_mask_buffer[head_next_idx], output_mask_buffer[head_idx]};
                     m_axis_sync_tx_tlast <= (output_last_frame_buffer[head_idx] || output_last_frame_buffer[head_next_idx]);
                 end else begin
                     // Odd ending block: Pad the remaining 256 bits with zeroes

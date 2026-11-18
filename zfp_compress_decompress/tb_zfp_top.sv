@@ -15,6 +15,15 @@ module tb_zfp_top #(
     input  logic                                s_tx_tlast,
     input  logic [AXIS_SYNC_TX_USER_WIDTH-1:0]  s_tx_tuser,
 
+
+    output logic [AXIS_SYNC_DATA_WIDTH-1:0]    mon_tdata,
+    output logic [AXIS_SYNC_KEEP_WIDTH-1:0]    mon_tkeep,
+    output logic                               mon_tvalid,
+    output logic                               mon_tready,
+    output logic                               mon_tlast,
+    output logic [AXIS_SYNC_TX_USER_WIDTH-1:0] mon_tuser,
+
+
     // Outputs from Decompressor
     output logic [PORT_COUNT*AXIS_SYNC_DATA_WIDTH-1:0]     m_rx_tdata,
     output logic [PORT_COUNT*AXIS_SYNC_KEEP_WIDTH-1:0]     m_rx_tkeep,
@@ -31,6 +40,13 @@ module tb_zfp_top #(
     logic                               int_tready;
     logic                               int_tlast;
     logic [AXIS_SYNC_TX_USER_WIDTH-1:0] int_tuser;
+
+    assign mon_tdata = int_tdata;
+    assign mon_tkeep = int_tkeep;
+    assign mon_tvalid = int_tvalid;
+    assign mon_tready = int_tready;
+    assign mon_tlast = int_tlast;
+    assign mon_tuser = int_tuser;
 
     // Sideband CPL signals (driven to defaults for testbench)
     logic [7:0] cpl_ts, m_cpl_ts;

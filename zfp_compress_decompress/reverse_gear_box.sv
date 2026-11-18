@@ -1,6 +1,6 @@
 
 module reverse_gear_box import zfp_types_pkg::*; #(
-    parameter WIDTH_ORIGIN = 100 //insert correct here
+    parameter COMP_MODE__ORIGIN = 336 //insert correct here
 )(
     input logic clk,
     input logic rst,
@@ -66,8 +66,8 @@ module reverse_gear_box import zfp_types_pkg::*; #(
             case(state)
                 S_FIRST:begin
                     last_frame <= 0;
-                    width_mode_buffer <= width_mode_t'(input_frame[WIDTH_ORIGIN +: 2]);
-                    width_mode <= width_mode_t'(input_frame[WIDTH_ORIGIN +: 2]);
+                    width_mode_buffer <= width_mode_t'(input_frame[COMP_MODE__ORIGIN +: 2]);
+                    width_mode <= width_mode_t'(input_frame[COMP_MODE__ORIGIN +: 2]);
                     if(valid_in)begin
                         header <= input_frame[0 +:384];
                         header_valid <= 1'b1;
@@ -146,14 +146,14 @@ module reverse_gear_box import zfp_types_pkg::*; #(
         end
     end
 
-    
+
     always_comb begin
         logic [1:0] current_width;
 
         temp_buffer = data_buffer | (1024'(input_frame) << accum_bits); 
 
         ready = (accum_bits < 512 && state != S_LAST);
-        current_width = (state == S_FIRST) ? input_frame[WIDTH_ORIGIN +: 2] : width_mode;
+        current_width = (state == S_FIRST) ? input_frame[COMP_MODE__ORIGIN +: 2] : width_mode;
 
         case(current_width)
             WIDTH_21: out4_comb = {24'b0, input_frame[384 +: 21]};

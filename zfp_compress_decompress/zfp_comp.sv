@@ -148,7 +148,7 @@ module zfp_comp(
         end
 
         // Stage 4
-        bit_idx            = 31;
+        bit_idx            = 0; // Fix: Initialize at LSB
         // Cast the literal to 6 bits to prevent shift warnings, and use the pipelined max_bits
         max_bits_val       = 6'd8 << max_bits_int[2]; 
         emmited_signs      = 4'd0;
@@ -162,26 +162,28 @@ module zfp_comp(
             if(index <= max_bit_pos) begin
                 for(int c_i = 0; c_i < 4; c_i++) begin
                     
-                    // Cast evaluation to 6 bits 
-                    logic [5:0] bits_used = 6'(31 - bit_idx);
+                    // Fix: Since we start at 0 and increment, bit_idx directly reflects bits used
+                    logic [5:0] bits_used = 6'(bit_idx);
                     
                     if (bits_used < max_bits_val && !budget_hit) begin
                         current_bit = abs_coeffs_s4[c_i][index];
                         
                         // Because coeffs_s4 is correctly declared as signed, `coeffs_s4 < 0` will evaluate properly
                         if (current_bit == 1'b1 && ~emmited_signs[c_i]) begin
-                            // Guard against negative array indexing when checking bounds
-                            if (bits_used + 6'd2 <= max_bits_val && bit_idx >= 1) begin
+                            // Fix: Ensure we don't write past index 31 when adding 2 bits
+                            if (bits_used + 6'd2 <= max_bits_val && bit_idx <= 30) begin
                                 emmited_signs[c_i]              = 1'b1;
                                 internal_bitstream[bit_idx]     = 1'b1;
-                                internal_bitstream[bit_idx - 1] = (coeffs_s4[c_i] < 0) ? 1'b1 : 1'b0;
-                                bit_idx                        -= 2;
+                                // Fix: Write sign bit to the next highest index
+                                internal_bitstream[bit_idx + 1] = (coeffs_s4[c_i] < 0) ? 1'b1 : 1'b0;
+                                bit_idx                        += 2; // Fix: Increment up
                             end else begin
                                 budget_hit = 1'b1;
                             end
-                        end else if (bit_idx >= 0) begin
+                        // Fix: Ensure we don't write past index 31 when adding 1 bit
+                        end else if (bit_idx < 32) begin
                             internal_bitstream[bit_idx] = current_bit;
-                            bit_idx                    -= 1;
+                            bit_idx                    += 1; // Fix: Increment up
                         end
                         
                     end

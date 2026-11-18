@@ -1,6 +1,7 @@
 import numpy as np
 import math
 import argparse
+import struct
 
 def zfp_1d_block_compress_fixed(block, max_bits):
     max_val = np.max(np.abs(block))
@@ -98,6 +99,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process a file with optional settings.")
     parser.add_argument("-i", "--input", default="32_2048.bin")
     parser.add_argument("-o", "--output", default="output_golden.bin")
+    parser.add_argument('-m', "--monitor", default="golden_monitor.bin")
     args = parser.parse_args()
     
     # Load data and ensure it's evaluated as floats for ZFP scaling
@@ -105,6 +107,8 @@ if __name__ == "__main__":
     bit_budget = 32
 
     out_list = []
+    
+    print(f"input bytes: {len(data_array)*4}")
 
     # 1. Compress in chunks of 4
     for i in range(len(data_array) // 4):
@@ -116,6 +120,49 @@ if __name__ == "__main__":
         # Use append to keep the tuple intact for the decoder
         out_list.append((exponent, max_bit_pos, compressed_stream))
 
+
+    with open(args.monitor, "wb") as f:
+        bit_buffer = 0
+        bit_count = 0
+        
+        def add_bits(val, num_bits):
+            global bit_buffer, bit_count
+            # Mask the value to strictly enforce the bit width
+            val = int(val) & ((1 << num_bits) - 1)
+            # Shift the value into the correct position in the buffer
+            bit_buffer |= (val << bit_count)
+            bit_count += num_bits
+            
+            # Write full 8-bit bytes to the file as they accumulate
+            while bit_count >= 8:
+                f.write(struct.pack('<B', bit_buffer & 0xFF))
+                bit_buffer >>= 8
+                bit_count -= 8
+        i = 0
+        for exponent, max_bit_pos, compressed_stream in out_list:
+            if i == 0:
+                print(f"exponent: {exponent}, max pos : {max_bit_pos}, stream: {compressed_stream}")
+                i += 1
+            
+            # 1. Pack Exponent (8 bits)
+            # Apply a +127 bias so negative exponents serialize safely as unsigned integers.
+            add_bits(exponent + 127-1, 8)
+            
+            # 2. Pack Max Bit Position (5 bits - sufficient for values 0-31)
+            add_bits(max_bit_pos, 5)
+            
+            # 3. Pack the Compressed Stream
+            bits_written = 0
+            for bit in compressed_stream:
+                add_bits(bit, 1)
+                bits_written += 1
+                
+
+                
+        # Flush any remaining bits in the buffer (this will perfectly align to 8 bits)
+        if bit_count > 0:
+            f.write(struct.pack('<B', bit_buffer & 0xFF))
+            
     decompressed_list = []
 
     # 2. Decompress
@@ -125,7 +172,7 @@ if __name__ == "__main__":
         decompressed_list.extend(decompressed_block)  
 
             
-
+    print(f"output bytes {len(decompressed_list) * 4}")
     with open(args.output, "wb") as f:
         f.write(np.array(decompressed_list, dtype=np.float32).tobytes())
 

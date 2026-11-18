@@ -1,9 +1,11 @@
 package zfp_types_pkg;
 
     typedef struct packed {
-        logic [7:0] exponent;
-        logic [4:0] max_pos;
         logic [31:0] stream;
+        logic [4:0] max_pos;
+        logic [7:0] exponent;
+        
+        
     } zfp_comp_data_t;
 
     typedef enum logic [1:0] {
