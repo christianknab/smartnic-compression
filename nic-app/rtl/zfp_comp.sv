@@ -82,7 +82,8 @@ module zfp_comp(
             if (d_in[i][30:0] == 31'd0) begin
                 conv_ints[i] <= '0;
             end else begin
-                logic [30:0] mag = 31'({1'b1, d_in[i][22:0], 7'd0} >> (emax_s1 - d_in[i][30:23]));
+                logic [30:0] mag;
+                mag = 31'({1'b1, d_in[i][22:0], 7'd0} >> (emax_s1 - d_in[i][30:23]));
                 conv_ints[i] <= d_in[i][31] ? -$signed({1'b0, mag}) : $signed({1'b0, mag});
             end
         end
@@ -158,13 +159,15 @@ module zfp_comp(
         budget_hit = 1'b0;
 
         for(int i = 32; i > 0; i--) begin
-            int index = i - 1;
+            int index;
+            index = i - 1;
             
             if(index <= max_bit_pos) begin
                 for(int c_i = 0; c_i < 4; c_i++) begin
                     
                     // Fix: Since we start at 0 and increment, bit_idx directly reflects bits used
-                    logic [5:0] bits_used = 6'(bit_idx);
+                    logic [5:0] bits_used;
+                    bits_used = 6'(bit_idx);
                     
                     if (bits_used < max_bits_val && !budget_hit) begin
                         current_bit = abs_coeffs_s4[c_i][index];
