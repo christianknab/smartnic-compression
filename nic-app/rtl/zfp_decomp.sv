@@ -55,28 +55,28 @@ module zfp_decomp (
             found_c[i]  = 1'b0;
         end
         
-        bit_idx = 31;
+        bit_idx = 0;
         max_bits_val = 7'd8 << stream_len; 
         budget_hit = 1'b0;
         
         for (int index = 31; index >= 0; index--) begin
             if (index <= max_pos) begin
                 for (int c_i = 0; c_i < 4; c_i++) begin
-                    bits_used = 31 - bit_idx;
+                    bits_used = bit_idx;
                     
                     if (bits_used < max_bits_val && !budget_hit) begin
                         if (comp_stream[bit_idx] == 1'b1 && !found_c[c_i]) begin
                             if (bits_used + 2 <= max_bits_val) begin
                                 found_c[c_i] = 1'b1;
                                 coeffs_c[c_i][index] = 1'b1;
-                                signs_c[c_i] = comp_stream[bit_idx - 1]; 
-                                bit_idx -= 2;
+                                signs_c[c_i] = comp_stream[bit_idx + 1]; 
+                                bit_idx += 2;
                             end else begin
                                 budget_hit = 1'b1; // Abort entirely to maintain alignment
                             end
                         end else begin
                             coeffs_c[c_i][index] = comp_stream[bit_idx];
-                            bit_idx -= 1;
+                            bit_idx += 1;
                         end
                     end
                 end

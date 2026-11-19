@@ -165,11 +165,11 @@ def decode_block(blk: int, w: int) -> list[int]:
     coeffs = [0] * 4
     signs = [0] * 4
     found = [False] * 4
-    bit_idx = 31
+    bit_idx = 0
     budget_hit = False
     for index in range(max_pos, -1, -1):
         for c in range(4):
-            used = 31 - bit_idx
+            used = bit_idx
             if not (used < budget and not budget_hit):
                 continue
             bit = (stream >> bit_idx) & 1
@@ -177,13 +177,13 @@ def decode_block(blk: int, w: int) -> list[int]:
                 if used + 2 <= budget:
                     found[c] = True
                     coeffs[c] |= 1 << index
-                    signs[c] = (stream >> (bit_idx - 1)) & 1
-                    bit_idx -= 2
+                    signs[c] = (stream >> (bit_idx + 1)) & 1
+                    bit_idx += 2
                 else:
                     budget_hit = True
             else:
                 coeffs[c] |= bit << index
-                bit_idx -= 1
+                bit_idx += 1
 
     # stage 2: signs, undo >> 2, first inverse butterfly (34-bit arithmetic)
     cv = [wrap34(wrap34(-co if sg else co) << 2) for co, sg in zip(coeffs, signs)]
