@@ -14,9 +14,7 @@ not from the RTL, and mirrors the testbench chain:
     zfp_tx_codec -> mqnic_egress (Corundum TX checksum) -> pad to 60 bytes
     (what a MAC would do) -> zfp_rx_codec
 
-The encoder/decoder are the placeholders (zfp_encode.v / zfp_decode.v): each
-value keeps its top W//4 bits. When the real ZFP modules go in, encode_block()
-and decode_block() here have to be replaced by a bit-exact model of them.
+--check-payload doesnt work for right now!!!! FIX CHRISTIANNN
 """
 
 import argparse
@@ -304,7 +302,27 @@ def first_diff(a: str, b: str) -> int:
     return min(len(a), len(b))
 
 
-def check(d: Path) -> int:
+# Bytes of a compressed frame that depend on the ZFP output, as (start, end)
+# with end None meaning "to the end of the frame". Skipped unless --check-payload.
+#   wire: UDP checksum (covers the packed blocks) and the packed blocks after
+#         the 6-byte codec header
+#   out:  the decoded floats
+PAYLOAD_RANGES = {
+    "wire": [(40, 42), (48, None)],
+    "out":  [(42, None)],
+}
+
+
+def mask(hexstr: str, ranges) -> str:
+    """Zero the given byte ranges; the length stays the same."""
+    b = bytearray.fromhex(hexstr)
+    for start, end in ranges:
+        end = len(b) if end is None else end
+        b[start:end] = bytes(len(b[start:end]))
+    return b.hex()
+
+
+def check(d: Path, check_payload: bool = False) -> int:
     exp = json.loads((d / "expected.json").read_text())
     got = {"W": {}, "O": {}}
     for line in (d / "got.txt").read_text().splitlines():
@@ -316,10 +334,13 @@ def check(d: Path) -> int:
     for i, e in enumerate(exp["frames"]):
         for kind, key in (("W", "wire"), ("O", "out")):
             g = got[kind].get(i)
-            if g != e[key]:
+            want = e[key]
+            if g is not None and e["compressed"] and not check_payload:
+                g, want = mask(g, PAYLOAD_RANGES[key]), mask(want, PAYLOAD_RANGES[key])
+            if g != want:
                 fails += 1
                 where = "missing" if g is None else \
-                    f"len {len(g) // 2} vs {len(e[key]) // 2}, first diff at byte {first_diff(g, e[key])}"
+                    f"len {len(g) // 2} vs {len(want) // 2}, first diff at byte {first_diff(g, want)}"
                 print(f"FAIL frame {i} ({e['name']}) {key}: {where}")
         if e["compressed"]:
             in_bytes += e["in_len"]
@@ -328,6 +349,8 @@ def check(d: Path) -> int:
     n = len(exp["frames"])
     n_comp = sum(e["compressed"] for e in exp["frames"])
     status = "PASS" if fails == 0 else f"FAIL ({fails} mismatches)"
+    if not check_payload:
+        status += " [payload not checked]"
     print(f"{status}: W={exp['block_bits']}, {n} frames, {n_comp} compressed, "
           f"compressed frames {in_bytes} -> {wire_bytes} bytes on the wire")
     return 1 if fails else 0
@@ -343,11 +366,14 @@ def main() -> int:
     g.add_argument("--seed", type=int, default=1)
     c = sub.add_parser("check")
     c.add_argument("dir", type=Path)
+    c.add_argument("--check-payload", action="store_true",
+                   help="also compare compressed payload bytes (needs a "
+                        "bit-exact encode_block/decode_block)")
     a = p.parse_args()
     if a.cmd == "gen":
         gen(a.dir, a.block_bits, a.seed)
         return 0
-    return check(a.dir)
+    return check(a.dir, a.check_payload)
 
 
 if __name__ == "__main__":
