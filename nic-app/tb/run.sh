@@ -5,6 +5,8 @@
 #
 #   nic-app/tb/run.sh                 # all configurations
 #   nic-app/tb/run.sh 29              # one block size
+#   nic-app/tb/run.sh --skip-payload  # don't compare the compressed/decoded
+#                                     # payloads (works with a size too)
 #
 # Configurations: BLOCK_BITS 21/29/45.
 # Output in nic-app/tb/build/w<W>/ (got.txt, expected.json, sim.log).
@@ -27,6 +29,12 @@ SRC_FLAGS=()
 for s in "$REPO/nic-app/rtl" "$FPGA/common/rtl" "$FPGA/lib/axis/rtl"; do
     SRC_FLAGS+=(-y "$s" "+incdir+$s")
 done
+
+check_flags=()
+if [ "${1:-}" = "--skip-payload" ]; then
+    check_flags=(--skip-payload)
+    shift
+fi
 
 block_bits=("${1:-21 29 45}")
 
@@ -51,7 +59,7 @@ for w in ${block_bits[*]}; do
         continue
     fi
     grep -E "ERROR|tb_zfp:" "$d/sim.log" || true
-    python3 "$TB_DIR/zfp_vectors.py" check "$d" || fails=$((fails + 1))
+    python3 "$TB_DIR/zfp_vectors.py" check "$d" "${check_flags[@]}" || fails=$((fails + 1))
 done
 
 if [ "$fails" -ne 0 ]; then

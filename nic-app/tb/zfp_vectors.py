@@ -4,7 +4,7 @@
     zfp_vectors.py gen DIR --block-bits W [--seed N]
         writes DIR/frames.mem, DIR/desc.mem (read by the testbench) and
         DIR/expected.json
-    zfp_vectors.py check DIR
+    zfp_vectors.py check DIR [--skip-payload]
         compares DIR/got.txt (written by the testbench) against
         DIR/expected.json; exit status 1 on any mismatch
 
@@ -14,7 +14,11 @@ not from the RTL, and mirrors the testbench chain:
     zfp_tx_codec -> mqnic_egress (Corundum TX checksum) -> pad to 60 bytes
     (what a MAC would do) -> zfp_rx_codec
 
---check-payload doesnt work for right now!!!! FIX CHRISTIANNN
+encode_block()/decode_block() are bit-exact models of the ZFP RTL
+(nic-app/rtl/zfp_comp.sv / zfp_decomp.sv), bugs included, so `check` compares
+the compressed and decoded payloads too. Any change to the RTL's output makes
+it fail until those two functions are updated to match; --skip-payload skips
+the bytes that depend on the ZFP output (see PAYLOAD_RANGES) in the meantime.
 """
 
 import argparse
@@ -73,19 +77,137 @@ def tx_checksum(frame: bytes, enable: int, start: int, offset: int) -> bytes:
     return bytes(f)
 
 
-# ------------------------------------------------------- placeholder codec
+# ------------------------------------------------------------- ZFP codec
+#
+# Bit-exact models of nic-app/rtl/zfp_comp.sv and zfp_decomp.sv as wrapped by
+# zfp_encode.sv / zfp_decode.sv.
+#
+# Block layout (zfp_encode.sv): {stream[W-14:0], max_pos[4:0], exponent[7:0]}
+
+HDR_BITS = 13  # exponent (8) + max_pos (5)
+
+
+def zfp_mode(w: int) -> int:
+    """BLOCK_BITS -> the cores' 2-bit max_bits / stream_len input."""
+    return {21: 0, 29: 1, 45: 2}[w]
+
+
+def wrap34(v: int) -> int:
+    """Wrap to a 34-bit two's complement value (the cores' signed [33:0])."""
+    v &= (1 << 34) - 1
+    return v - (1 << 34) if v >> 33 else v
+
+
+def div2_trunc34(v: int) -> int:
+    """zfp_decomp's `v[33] ? (v + 1) >>> 1 : v >>> 1` on 34-bit values."""
+    return wrap34(v + 1) >> 1 if v < 0 else v >> 1
+
 
 def encode_block(vals: list[int], w: int) -> int:
-    k = w // 4
-    blk = 0
-    for i, v in enumerate(vals):
-        blk |= (v >> (32 - k)) << (i * k)
-    return blk
+    """zfp_comp: 4 raw fp32 bit patterns (value 0 first) -> W-bit block."""
+    mode = zfp_mode(w)
+
+    # stage 1: shared exponent and float -> fixed point
+    emax = max((v >> 23) & 0xFF for v in vals)
+    ints = []
+    for v in vals:
+        if v & 0x7FFF_FFFF == 0:
+            ints.append(0)
+            continue
+        e = (v >> 23) & 0xFF
+        mag = ((1 << 30) | ((v & 0x7F_FFFF) << 7)) >> (emax - e)
+        ints.append(-mag if v >> 31 else mag)
+
+    # stage 2: forward transform (fits in 34 bits, so no wrapping)
+    s0, s1 = ints[0] + ints[1], ints[2] + ints[3]
+    d0, d1 = ints[0] - ints[1], ints[2] - ints[3]
+    coeffs = [(s0 + s1) >> 2, (d0 + d1) >> 2, (s0 - s1) >> 2, (d0 - d1) >> 2]
+
+    # stage 3: magnitudes and top bit plane
+    mags = [abs(c) & 0x7FFF_FFFF for c in coeffs]
+    max_pos = max(mags).bit_length() - 1 if max(mags) else 0
+
+    # stage 4: bit-plane coding, LSB first
+    budget = (8 << mode) & 0x3F  # 6-bit in the RTL
+    stream = bit_idx = 0
+    emitted = [False] * 4
+    budget_hit = False
+    for index in range(max_pos, -1, -1):
+        for c in range(4):
+            if not (bit_idx < budget and not budget_hit):
+                continue
+            bit = (mags[c] >> index) & 1
+            if bit and not emitted[c]:
+                if bit_idx + 2 <= budget and bit_idx <= 30:
+                    emitted[c] = True
+                    stream |= 1 << bit_idx
+                    stream |= (coeffs[c] < 0) << (bit_idx + 1)
+                    bit_idx += 2
+                else:
+                    budget_hit = True
+            elif bit_idx < 32:
+                stream |= bit << bit_idx
+                bit_idx += 1
+
+    sb = w - HDR_BITS
+    return ((stream & ((1 << sb) - 1)) << HDR_BITS) | (max_pos << 8) | emax
 
 
 def decode_block(blk: int, w: int) -> list[int]:
-    k = w // 4
-    return [((blk >> (i * k)) & ((1 << k) - 1)) << (32 - k) for i in range(4)]
+    """zfp_decomp: W-bit block -> 4 raw fp32 bit patterns (value 0 first)."""
+    mode = zfp_mode(w)
+    emax = blk & 0xFF
+    max_pos = (blk >> 8) & 0x1F
+    stream = (blk >> HDR_BITS) & 0xFFFF_FFFF
+
+    # stage 1: bit-plane decode, read MSB first starting at bit 31
+    budget = 8 << mode  # 7-bit in the RTL
+    coeffs = [0] * 4
+    signs = [0] * 4
+    found = [False] * 4
+    bit_idx = 31
+    budget_hit = False
+    for index in range(max_pos, -1, -1):
+        for c in range(4):
+            used = 31 - bit_idx
+            if not (used < budget and not budget_hit):
+                continue
+            bit = (stream >> bit_idx) & 1
+            if bit and not found[c]:
+                if used + 2 <= budget:
+                    found[c] = True
+                    coeffs[c] |= 1 << index
+                    signs[c] = (stream >> (bit_idx - 1)) & 1
+                    bit_idx -= 2
+                else:
+                    budget_hit = True
+            else:
+                coeffs[c] |= bit << index
+                bit_idx -= 1
+
+    # stage 2: signs, undo >> 2, first inverse butterfly (34-bit arithmetic)
+    cv = [wrap34(wrap34(-co if sg else co) << 2) for co, sg in zip(coeffs, signs)]
+    s = [div2_trunc34(wrap34(cv[0] + cv[2])), div2_trunc34(wrap34(cv[0] - cv[2]))]
+    d = [div2_trunc34(wrap34(cv[1] + cv[3])), div2_trunc34(wrap34(cv[1] - cv[3]))]
+
+    # stage 3: second inverse butterfly
+    xs = [div2_trunc34(wrap34(s[0] + d[0])), div2_trunc34(wrap34(s[0] - d[0])),
+          div2_trunc34(wrap34(s[1] + d[1])), div2_trunc34(wrap34(s[1] - d[1]))]
+
+    # stage 4: fixed point -> IEEE 754
+    out = []
+    for x in xs:
+        sign = 1 if x < 0 else 0
+        mag = (-x if sign else x) & 0x7FFF_FFFF
+        if mag == 0 or emax == 0:
+            out.append(0)
+            continue
+        pos = mag.bit_length() - 1
+        true_exp = emax + pos - 30
+        exp = 0 if true_exp <= 0 else 255 if true_exp >= 255 else true_exp
+        shifted = (mag >> (pos - 23)) if pos >= 23 else (mag << (23 - pos)) & 0x7FFF_FFFF
+        out.append((sign << 31) | (exp << 23) | (shifted & 0x7F_FFFF))
+    return out
 
 
 # ------------------------------------------------------------ frame model
@@ -303,7 +425,7 @@ def first_diff(a: str, b: str) -> int:
 
 
 # Bytes of a compressed frame that depend on the ZFP output, as (start, end)
-# with end None meaning "to the end of the frame". Skipped unless --check-payload.
+# with end None meaning "to the end of the frame". Skipped with --skip-payload.
 #   wire: UDP checksum (covers the packed blocks) and the packed blocks after
 #         the 6-byte codec header
 #   out:  the decoded floats
@@ -322,7 +444,7 @@ def mask(hexstr: str, ranges) -> str:
     return b.hex()
 
 
-def check(d: Path, check_payload: bool = False) -> int:
+def check(d: Path, check_payload: bool = True) -> int:
     exp = json.loads((d / "expected.json").read_text())
     got = {"W": {}, "O": {}}
     for line in (d / "got.txt").read_text().splitlines():
@@ -366,14 +488,15 @@ def main() -> int:
     g.add_argument("--seed", type=int, default=1)
     c = sub.add_parser("check")
     c.add_argument("dir", type=Path)
-    c.add_argument("--check-payload", action="store_true",
-                   help="also compare compressed payload bytes (needs a "
-                        "bit-exact encode_block/decode_block)")
+    c.add_argument("--skip-payload", action="store_true",
+                   help="don't compare the bytes that depend on the ZFP "
+                        "output (for when the RTL has changed and "
+                        "encode_block/decode_block haven't caught up yet)")
     a = p.parse_args()
     if a.cmd == "gen":
         gen(a.dir, a.block_bits, a.seed)
         return 0
-    return check(a.dir, a.check_payload)
+    return check(a.dir, check_payload=not a.skip_payload)
 
 
 if __name__ == "__main__":
