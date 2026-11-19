@@ -81,9 +81,9 @@ def zfp_1d_block_decompress_fixed(emax, max_bit_pos, bitstream):
     # Restore signs
     
     dec_coeffs = [c * s for c, s in zip(dec_c, signs)]
-    print(f"dec coefs: {dec_coeffs}")
+    # print(f"dec coefs: {dec_coeffs}")
     c0, c1, c2, c3 = [c * 4 for c in dec_coeffs]
-    print(f"c0: {c0}, c1: {c1}, c2: {c2}, c3: {c3}")
+    # print(f"c0: {c0}, c1: {c1}, c2: {c2}, c3: {c3}")
     s0 = (c0 + c2) >> 1; s1 = (c0 - c2) >> 1
     d0 = (c1 + c3) >> 1; d1 = (c1 - c3) >> 1
     x0 = (s0 + d0) >> 1; x1 = (s0 - d0) >> 1
@@ -108,7 +108,7 @@ if __name__ == "__main__":
 
     out_list = []
     
-    print(f"input bytes: {len(data_array)*4}")
+    # print(f"input bytes: {len(data_array)*4}")
 
     # 1. Compress in chunks of 4
     for i in range(len(data_array) // 4):
@@ -141,7 +141,7 @@ if __name__ == "__main__":
         i = 0
         for exponent, max_bit_pos, compressed_stream in out_list:
             if i == 0:
-                print(f"exponent: {exponent}, max pos : {max_bit_pos}, stream: {compressed_stream}")
+                # print(f"exponent: {exponent}, max pos : {max_bit_pos}, stream: {compressed_stream}")
                 i += 1
             
             # 1. Pack Exponent (8 bits)
@@ -172,7 +172,7 @@ if __name__ == "__main__":
         decompressed_list.extend(decompressed_block)  
 
             
-    print(f"output bytes {len(decompressed_list) * 4}")
+    # print(f"output bytes {len(decompressed_list) * 4}")
     with open(args.output, "wb") as f:
         f.write(np.array(decompressed_list, dtype=np.float32).tobytes())
 

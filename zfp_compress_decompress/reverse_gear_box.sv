@@ -6,6 +6,7 @@ module reverse_gear_box import zfp_types_pkg::*; #(
     input logic en,
     input logic valid_in,
     input logic [511:0] input_frame,
+    input logic [63:0] tkeep,
     input logic last_of_packet,
     input logic first_of_packet,
     
@@ -41,6 +42,18 @@ module reverse_gear_box import zfp_types_pkg::*; #(
         .out4(out4_int),
         .out_valid(out_valid_int)
     );
+
+    logic [9:0] incoming_bits;
+
+    always_comb begin
+        // Count valid bytes from tkeep on the last beat (or all beats)
+        logic [6:0] valid_bytes;
+        valid_bytes = '0;
+        for (int i = 0; i < 64; i++) begin
+            valid_bytes += 7'(tkeep[i]);
+        end
+        incoming_bits = last_of_packet ? {valid_bytes, 3'b000} : 10'd512;
+    end
 
     always_comb begin
         logic [1:0] current_width;
@@ -123,13 +136,13 @@ module reverse_gear_box import zfp_types_pkg::*; #(
                     if(valid_in && ready)begin
                         if (accum_bits >= current_out_width) begin
                             // Output a block and read new frame
-                            accum_bits <= accum_bits + 512 - current_out_width;
+                            accum_bits <= accum_bits + incoming_bits - current_out_width;
                             data_buffer <= temp_buffer; // temp_buffer already handles the shift
                             packed_data <= data_buffer[179:0]; // Capture bottom before overwrite
                             valid_bits <= current_out_width[7:0];
                         end else begin
                             // Incoming data but not enough accumulated to output yet
-                            accum_bits <= accum_bits + 512;
+                            accum_bits <= accum_bits + incoming_bits;
                             data_buffer <= temp_buffer;
                             valid_bits <= '0;
                         end
@@ -150,23 +163,26 @@ module reverse_gear_box import zfp_types_pkg::*; #(
                 end
                 
                 S_LAST: begin
-                    if(accum_bits >= current_out_width)begin 
+                    if (accum_bits > current_out_width) begin
+                        // More than one output block remaining
                         data_buffer <= data_buffer >> current_out_width;
                         packed_data <= data_buffer[179:0];
-                        valid_bits <= current_out_width[7:0];
-                        accum_bits <= accum_bits - current_out_width;
-                    end else if(accum_bits > 0)begin
-                        data_buffer <= 0;
+                        valid_bits  <= current_out_width[7:0];
+                        accum_bits  <= accum_bits - current_out_width;
+                    end else if (accum_bits > 0) begin
+                        // Final block (either exact multiple == current_out_width, or partial < current_out_width)
+                        data_buffer <= '0;
                         packed_data <= data_buffer[179:0];
-                        valid_bits <= accum_bits[7:0];
-                        accum_bits <= 0;
-                        state <= S_FIRST;
-                        last_frame <= 1;
+                        valid_bits  <= accum_bits[7:0];
+                        accum_bits  <= '0;
+                        last_frame  <= 1'b1;
+                        state       <= S_FIRST;
                     end else begin
-                        state <= S_FIRST;
-                        last_frame <= 1;
-                        valid_bits <= '0;
-                    end 
+                        // Safety catch-all if S_LAST was entered with 0 bits
+                        state       <= S_FIRST;
+                        last_frame  <= 1'b1;
+                        valid_bits  <= '0;
+                    end
                 end
                 
                 default:begin

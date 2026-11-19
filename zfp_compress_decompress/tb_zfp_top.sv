@@ -2,7 +2,9 @@ module tb_zfp_top #(
     parameter PORT_COUNT = 1,
     parameter AXIS_SYNC_KEEP_WIDTH = AXIS_SYNC_DATA_WIDTH/8,
     parameter AXIS_SYNC_DATA_WIDTH = 512, // Set to standard 512-bit width for example
-    parameter AXIS_SYNC_TX_USER_WIDTH = 8
+
+    parameter AXIS_SYNC_TX_USER_WIDTH = 17,
+    parameter AXIS_SYNC_RX_USER_WIDTH = 17
 )(
     input  logic clk,
     input  logic rst,
@@ -59,7 +61,8 @@ module tb_zfp_top #(
     assign m_cpl_ready = 1'b1;
 
     zfp_comp_axi #(
-        .AXIS_SYNC_DATA_WIDTH(AXIS_SYNC_DATA_WIDTH)
+        .AXIS_SYNC_DATA_WIDTH(AXIS_SYNC_DATA_WIDTH),
+        .AXIS_SYNC_TX_USER_WIDTH(AXIS_SYNC_TX_USER_WIDTH)
     ) comp_inst (
         .clk(clk),
         .rst(rst),
@@ -89,7 +92,9 @@ module tb_zfp_top #(
     );
 
     zfp_decomp_axi #(
-        .AXIS_SYNC_DATA_WIDTH(AXIS_SYNC_DATA_WIDTH)
+        .AXIS_SYNC_DATA_WIDTH(AXIS_SYNC_DATA_WIDTH),
+        .AXIS_SYNC_RX_USER_WIDTH(AXIS_SYNC_RX_USER_WIDTH)
+
     ) decomp_inst (
         .clk(clk),
         .rst(rst),

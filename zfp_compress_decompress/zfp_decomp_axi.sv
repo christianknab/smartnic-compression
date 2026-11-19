@@ -5,9 +5,8 @@ import zfp_types_pkg::*;
     parameter AXIS_SYNC_KEEP_WIDTH = AXIS_SYNC_DATA_WIDTH/8,
     parameter AXIS_SYNC_DATA_WIDTH = 512,
     parameter AXIS_KEEP_WIDTH_32 = AXIS_SYNC_DATA_WIDTH/32,
-    parameter AXIS_SYNC_TX_USER_WIDTH = 8,
     parameter BUFFER_SLOTS = 4,
-    parameter AXIS_SYNC_RX_USER_WIDTH = 8,
+    parameter AXIS_SYNC_RX_USER_WIDTH = 17,
     parameter COMP_MODE_ORIGIN = 336
 )(
     input logic clk,
@@ -38,7 +37,7 @@ import zfp_types_pkg::*;
 assign axi_input_valid = s_axis_sync_rx_tvalid & s_axis_sync_rx_tready;
 
 logic is_first_beat, is_first_sent_beat, axi_input_valid;
-logic [AXIS_SYNC_TX_USER_WIDTH-1:0] tuser_buffer [BUFFER_SLOTS-1:0];
+logic [AXIS_SYNC_RX_USER_WIDTH-1:0] tuser_buffer [BUFFER_SLOTS-1:0];
 logic [$clog2(BUFFER_SLOTS):0] tuser_front, tuser_tail, cur_tuser;
 logic en;
 
@@ -87,8 +86,8 @@ logic [31:0] decompressed_data [3:0][3:0];
 logic [3:0] decomp_data_valid;
 logic last_frame, gear_ready;
 
-assign en = m_axis_sync_rx_tready || (~m_axis_sync_rx_tready && ~m_axis_sync_rx_tvalid);
-assign s_axis_sync_rx_tready = gear_ready;
+assign en = m_axis_sync_rx_tready || ~m_axis_sync_rx_tvalid;
+assign s_axis_sync_rx_tready = gear_ready && en;
 /*
     Reverse gear box
 
@@ -98,6 +97,7 @@ reverse_gear_box decomp_gear_box(
     .rst(rst),
     .en(en),
     .valid_in(s_axis_sync_rx_tvalid),
+    .tkeep(s_axis_sync_rx_tkeep),
     .input_frame(s_axis_sync_rx_tdata),
     .last_of_packet(s_axis_sync_rx_tlast),
     .first_of_packet(is_first_beat),
@@ -159,9 +159,7 @@ endgenerate
                 header_buffer[0] <= 0;
                 header_valid_buf[0] <= 0;
             end
-            if(unpacked_valid != 0)
-                last_frame_buff[0] <= last_frame;
-
+            last_frame_buff[0] <= (unpacked_valid != 0) ? last_frame : 1'b0;
             for(int i = 3; i > 0; i--)begin
                 header_buffer[i] <= header_buffer[i-1];
                 header_valid_buf[i] <= header_valid_buf[i-1];
@@ -191,17 +189,21 @@ endgenerate
     logic [127:0] flat_row_3;
     always_comb begin
         flat_row_3 = {decompressed_data[3][3], 
-                  decompressed_data[3][2], 
-                  decompressed_data[3][1], 
-                  decompressed_data[3][0]};
+                      decompressed_data[3][2], 
+                      decompressed_data[3][1], 
+                      decompressed_data[3][0]};
 
-        m_axis_sync_rx_tdata = (header_valid_buf[3]) ? { flat_row_3, header_buffer[3]} : flat_decomp_data;
+        m_axis_sync_rx_tdata = (header_valid_buf[3])
+            ? { flat_row_3, header_buffer[3] }
+            : flat_decomp_data;
+
+        // MSB-to-LSB matches [511:0] data layout
         m_axis_sync_rx_tkeep = (header_valid_buf[3]) 
-            ? { {48{1'b1}}, {16{decomp_data_valid[3]}} } 
-            : { {16{decomp_data_valid[0]}}, {16{decomp_data_valid[1]}}, {16{decomp_data_valid[2]}}, {16{decomp_data_valid[3]}} };        
+            ? { {16{decomp_data_valid[3]}}, {48{1'b1}} } 
+            : { {16{decomp_data_valid[3]}}, {16{decomp_data_valid[2]}}, {16{decomp_data_valid[1]}}, {16{decomp_data_valid[0]}} };        
             
-        m_axis_sync_rx_tvalid = (decomp_data_valid != 0);
-        m_axis_sync_rx_tlast = last_frame_buff[3];
+        m_axis_sync_rx_tvalid = (decomp_data_valid != 0) || header_valid_buf[3];
+        m_axis_sync_rx_tlast  = last_frame_buff[3];
     end
 
 endmodule

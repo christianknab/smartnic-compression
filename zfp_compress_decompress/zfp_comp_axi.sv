@@ -6,7 +6,7 @@ import zfp_types_pkg::*;
     parameter AXIS_SYNC_KEEP_WIDTH = AXIS_SYNC_DATA_WIDTH/8,
     parameter AXIS_SYNC_DATA_WIDTH = 512,
     parameter AXIS_KEEP_WIDTH_32 = AXIS_SYNC_DATA_WIDTH/32,
-    parameter AXIS_SYNC_TX_USER_WIDTH = 8,
+    parameter AXIS_SYNC_TX_USER_WIDTH = 17,
     parameter BIT_WIDTH = 32,
     parameter ZFP_INPUT_SIZE = BIT_WIDTH *4,
     parameter BUFFER_SLOTS = 6,
@@ -259,6 +259,9 @@ always_ff @(posedge clk or posedge rst) begin
                 last_buffer[0] <= 1'b1;
             else 
                 last_buffer[0] <= 1'b0; 
+        end else begin
+            header_valid[0] <= 1'b0;
+            last_buffer[0]  <= 1'b0;
         end 
         
 
@@ -422,6 +425,7 @@ always_ff @(posedge clk or posedge rst) begin
                 end
             end else begin
                 m_axis_sync_tx_tvalid <= 1'b0;
+                m_axis_sync_tx_tlast  <= 1'b0;
             end
         end
     end
